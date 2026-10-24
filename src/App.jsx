@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 
 /* ============================================================================
- * THE VIBE ALCHEMIST
+ * MUSIC CAULDRON
  * Drop images + text into the Potion Stash -> Gemma 4 (via the Gemini API)
  * fuses them into one mood -> Spotify Search turns its genres into 5 songs.
  *
@@ -125,7 +125,7 @@ async function requestGemma(model, body) {
   if (thinkingSupported) {
     const response = await sendGemma(model, withMinimalThinking(body));
     if (response.status !== 400) return response;
-    console.warn("[Vibe Alchemist] thinkingConfig rejected, retrying without it", await response.text().catch(() => ""));
+    console.warn("[Music Cauldron] thinkingConfig rejected, retrying without it", await response.text().catch(() => ""));
     thinkingSupported = false;
   }
   return sendGemma(model, body);
@@ -149,10 +149,10 @@ async function callGemma(body) {
     if (attempt > 0) await wait(800 * attempt);
     response = await requestGemma(model, body);
     if (response.ok || ![500, 503].includes(response.status)) break;
-    console.warn(`[Vibe Alchemist] Gemini API ${response.status} on ${model}, retrying...`, await response.text().catch(() => ""));
+    console.warn(`[Music Cauldron] Gemini API ${response.status} on ${model}, retrying...`, await response.text().catch(() => ""));
   }
   if (!response.ok) {
-    console.error("[Vibe Alchemist] Gemini API error", response.status, await response.text().catch(() => ""));
+    console.error("[Music Cauldron] Gemini API error", response.status, await response.text().catch(() => ""));
     throw new Error("Gemma couldn't read your stash. Give the cauldron another stir.");
   }
   const data = await response.json();
@@ -221,7 +221,7 @@ function normalizeReading(data) {
 async function analyzeVibes(items) {
   const body = await buildGemmaRequest(items);
   if (CONFIG.mockGemma) {
-    console.info("[Vibe Alchemist] mock mode: Gemma request that would be sent", redactImages(body));
+    console.info("[Music Cauldron] mock mode: Gemma request that would be sent", redactImages(body));
     await wait(900);
     return parseGemmaJson(JSON.stringify(pickMockBrew(items).reading));
   }
@@ -371,7 +371,7 @@ async function completeSpotifyLogin() {
     }),
   });
   if (!response.ok) {
-    console.error("[Vibe Alchemist] Spotify login error", response.status, await response.text().catch(() => ""));
+    console.error("[Music Cauldron] Spotify login error", response.status, await response.text().catch(() => ""));
     return brew ? { brew, error: "Spotify login failed. Try saving again." } : null;
   }
   const data = await response.json();
@@ -387,7 +387,7 @@ async function spotifyUserFetch(path, token, body) {
   });
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
-    console.error("[Vibe Alchemist] Spotify playlist error", response.status, detail);
+    console.error("[Music Cauldron] Spotify playlist error", response.status, detail);
     if (response.status === 401) session.remove(AUTH_KEYS.token);
     throw new Error(
       response.status === 403
@@ -403,7 +403,7 @@ async function createPlaylist(token, reading, tracks) {
   if (!uris.length) throw new Error("These tracks aren't real Spotify tracks (demo mode).");
   const playlist = await spotifyUserFetch("/me/playlists", token, {
     name: reading.playlist_title,
-    description: `${reading.fusion_breakdown.the_fusion}. Brewed by The Vibe Alchemist.`,
+    description: `${reading.fusion_breakdown.the_fusion}. Brewed in the Music Cauldron.`,
     public: false,
   });
   await spotifyUserFetch(`/playlists/${playlist.id}/items`, token, { uris });
@@ -413,7 +413,7 @@ async function createPlaylist(token, reading, tracks) {
 async function searchTracks(query, token, offset = 0) {
   const response = await fetch(buildSearchUrl(query, offset), { headers: { Authorization: `Bearer ${token}` } });
   if (!response.ok) {
-    console.error("[Vibe Alchemist] Spotify API error", response.status, await response.text().catch(() => ""));
+    console.error("[Music Cauldron] Spotify API error", response.status, await response.text().catch(() => ""));
     throw new Error("Spotify couldn't conjure any tracks. Try brewing again.");
   }
   const data = await response.json();
@@ -474,7 +474,7 @@ async function findSuggestedTrack(song, token) {
 
 async function summonTracks(reading) {
   if (CONFIG.mockSpotify) {
-    console.info("[Vibe Alchemist] mock mode: Spotify searches that would be sent", reading.song_suggestions, reading.seed_genres);
+    console.info("[Music Cauldron] mock mode: Spotify searches that would be sent", reading.song_suggestions, reading.seed_genres);
     await wait(500);
     return mockSpotifyResponse(reading).tracks.map(normalizeTrack);
   }
@@ -1013,7 +1013,7 @@ function SongSearch({ disabled, onAddSong }) {
         })
         .catch((err) => {
           if (cancelled) return;
-          console.error("[Vibe Alchemist] song search failed", err);
+          console.error("[Music Cauldron] song search failed", err);
           setStatus("error");
           setOpen(true);
         });
@@ -1506,7 +1506,7 @@ function AlchemyLab({ items, mode, onModeChange, isDragging, error, brewing, pha
       <header className="mb-8 text-center">
         <p className="font-pixel text-[8px] tracking-[0.3em] text-lime-300/80 sm:text-[10px]">✦ A HALLOWEEN MOOD-TO-MUSIC MACHINE ✦</p>
         <h1 className="font-pixel mt-4 text-2xl leading-snug text-[#ffb347] [text-shadow:0_0_14px_#ff6a00,4px_4px_0_#3b0a52] sm:text-4xl">
-          THE VIBE <br className="sm:hidden" />ALCHEMIST
+          MUSIC <br className="sm:hidden" />CAULDRON
         </h1>
       </header>
 
@@ -1940,7 +1940,7 @@ export default function App() {
       setPlaylist({ status: "idle" });
       setStage("results");
     } catch (cause) {
-      console.error("[Vibe Alchemist] brew failed", cause);
+      console.error("[Music Cauldron] brew failed", cause);
       setError(cause instanceof Error ? cause.message : "The brew fizzled. Please try again.");
       setStage("stash");
     }
