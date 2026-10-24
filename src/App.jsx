@@ -88,6 +88,7 @@ async function fileToInlinePart(file, maxSide = 1024) {
 async function buildGemmaRequest(items) {
   const snippets = items.filter((item) => item.type === "text");
   const images = items.filter((item) => item.type === "image");
+  const songs = items.filter((item) => item.type === "song");
   const imageParts = await Promise.all(images.map((item) => fileToInlinePart(item.file)));
 
   const stash = [
@@ -97,6 +98,8 @@ async function buildGemmaRequest(items) {
     snippets.length
       ? snippets.map((item, index) => `${index + 1}. """${item.text}"""`).join("\n")
       : '(none, so set "text_mood" to "No text provided")',
+    "Songs the user picked (base music_mood on these, suggest songs in the same vein, but don't repeat them):",
+    songs.length ? songs.map((item, index) => `${index + 1}. "${item.name}" by ${item.artist}`).join("\n") : "(none)",
   ].join("\n");
 
   return {
@@ -216,11 +219,14 @@ function buildSearchUrl(query, offset = 0) {
 // Client Credentials needs the client secret, so tokens must be minted server-side:
 // POST https://accounts.spotify.com/api/token  (grant_type=client_credentials,
 // Authorization: Basic base64(client_id:client_secret)) -> return { access_token }.
+let appToken = null;
 async function getSpotifyToken() {
+  if (appToken && appToken.expiresAt > Date.now() + 60_000) return appToken.value;
   const response = await fetch(CONFIG.spotifyTokenEndpoint);
   if (!response.ok) throw new Error("Couldn't get a Spotify token from the server.");
-  const { access_token: token } = await response.json();
+  const { access_token: token, expires_in: expiresIn = 3600 } = await response.json();
   if (!token) throw new Error("The Spotify token endpoint returned no access_token.");
+  appToken = { value: token, expiresAt: Date.now() + expiresIn * 1000 };
   return token;
 }
 
@@ -235,6 +241,33 @@ function normalizeTrack(track) {
     url: track.external_urls?.spotify ?? spotifySearchUrl(`${track.name} ${artist}`),
     uri: track.uri ?? null, // spotify:track:... (absent on mock tracks)
   };
+}
+
+/* ----------------------------------------------------------------------------
+ * Song search (adds a song as an ingredient)
+ * ------------------------------------------------------------------------- */
+
+function toSongResult(track) {
+  const images = track.album?.images ?? [];
+  return {
+    id: track.id ?? `${track.name}-${track.artists?.[0]?.name}`,
+    name: track.name,
+    artist: (track.artists ?? []).map((a) => a.name).join(", ") || "Unknown artist",
+    art: images[images.length - 1]?.url ?? images[0]?.url ?? null, // smallest cover
+    uri: track.uri ?? null,
+  };
+}
+
+async function searchSongs(query) {
+  const q = query.trim();
+  if (!q) return [];
+  if (CONFIG.mockSpotify) {
+    const all = MOCK_BREWS.flatMap((brew) => brew.tracks.map(([name, artist]) => ({ name, artist, artists: [{ name: artist }] })));
+    const needle = q.toLowerCase();
+    return all.filter((t) => `${t.name} ${t.artist}`.toLowerCase().includes(needle)).slice(0, 6).map(toSongResult);
+  }
+  const token = await getSpotifyToken();
+  return (await searchTracks(q, token)).slice(0, 6).map(toSongResult);
 }
 
 /* ----------------------------------------------------------------------------
@@ -1008,7 +1041,7 @@ function SpawnPuff() {
 
 function PotionBottle({ item, index, onRemove }) {
   const s = BOTTLE_SCALE;
-  const label = item.type === "image" ? item.name : item.text;
+  const label = item.type === "image" ? item.name : item.type === "song" ? `${item.name} by ${item.artist}` : item.text;
   return (
     <motion.div
       layout
@@ -1030,6 +1063,13 @@ function PotionBottle({ item, index, onRemove }) {
         >
           {item.type === "image" ? (
             <img src={item.thumb} alt={item.name} className="h-full w-full object-cover [image-rendering:pixelated]" />
+          ) : item.type === "song" && item.art ? (
+            <div className="relative h-full w-full">
+              <img src={item.art} alt={label} className="h-full w-full object-cover" />
+              <span className="font-pixel absolute bottom-0 right-0 bg-[#3b2414] px-[2px] text-[6px] leading-[8px] text-[#ffcf7a]">♪</span>
+            </div>
+          ) : item.type === "song" ? (
+            <p className="font-vt line-clamp-2 break-words px-0.5 text-[13px] leading-[12px] text-[#3b2414]">♪ {item.name}</p>
           ) : (
             <p className="font-vt line-clamp-2 break-words px-0.5 text-[13px] leading-[12px] text-[#3b2414]">{item.text}</p>
           )}
@@ -1039,7 +1079,7 @@ function PotionBottle({ item, index, onRemove }) {
       <button
         type="button"
         onClick={() => onRemove(item.id)}
-        aria-label={`Remove ${item.type === "image" ? item.name : "text ingredient"}`}
+        aria-label={`Remove ${item.type === "text" ? "text ingredient" : label}`}
         className="font-pixel absolute right-1 top-3 h-6 w-6 border-2 border-[#0b0610] bg-[#7f1d1d] text-[8px] text-white opacity-0 transition focus:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100"
       >
         x
@@ -1071,7 +1111,114 @@ function DustMotes() {
   );
 }
 
-function PotionStash({ items, isDragging, error, onAddText, onAddFiles, onRemove, onBrew }) {
+function SongSearch({ disabled, onAddSong }) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState([]);
+  const [status, setStatus] = useState("idle"); // idle | searching | done | error
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2) {
+      setResults([]);
+      setStatus("idle");
+      return undefined;
+    }
+    let cancelled = false;
+    setStatus("searching");
+    const timer = window.setTimeout(() => {
+      searchSongs(q)
+        .then((found) => {
+          if (cancelled) return;
+          setResults(found);
+          setStatus("done");
+          setOpen(true);
+        })
+        .catch((err) => {
+          if (cancelled) return;
+          console.error("[Vibe Alchemist] song search failed", err);
+          setStatus("error");
+          setOpen(true);
+        });
+    }, 350); // debounce so we search once typing pauses
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [query]);
+
+  const pick = (song) => {
+    onAddSong(song);
+    setQuery("");
+    setResults([]);
+    setOpen(false);
+  };
+
+  return (
+    <div
+      className="relative mt-3"
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
+      }}
+    >
+      <label htmlFor="song-search" className="sr-only">Search Spotify for a song to add</label>
+      <div className="flex items-center gap-2 border-4 border-[#14532d] bg-[#07140c] px-3 focus-within:border-[#1ed760]">
+        <span aria-hidden="true" className="font-pixel text-[10px] text-[#1ed760]">♪</span>
+        <input
+          id="song-search"
+          type="search"
+          autoComplete="off"
+          value={query}
+          disabled={disabled}
+          onChange={(event) => setQuery(event.target.value)}
+          onFocus={() => results.length && setOpen(true)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") setOpen(false);
+            if (event.key === "Enter") {
+              event.preventDefault();
+              if (results[0]) pick(results[0]);
+            }
+          }}
+          placeholder="search Spotify for a song to add…"
+          className="font-vt min-w-0 flex-1 bg-transparent py-2 text-xl text-[#eafff1] outline-none placeholder:text-[#a7f3c0]/35 disabled:opacity-50"
+        />
+        {status === "searching" && <span className="font-pixel blink text-[7px] text-[#1ed760]/70">...</span>}
+      </div>
+
+      {open && status !== "idle" && status !== "searching" && (
+        <ul
+          role="listbox"
+          className="absolute left-0 right-0 top-full z-30 mt-1 max-h-80 overflow-y-auto border-4 border-[#14532d] bg-[#07140c] shadow-[6px_6px_0_#05030a]"
+        >
+          {status === "error" && <li className="font-vt px-3 py-2 text-lg text-red-300">Spotify search failed. Check your keys and try again.</li>}
+          {status === "done" && !results.length && <li className="font-vt px-3 py-2 text-lg text-[#a7f3c0]/60">No songs found.</li>}
+          {results.map((song) => (
+            <li key={song.id} role="option" aria-selected="false">
+              <button
+                type="button"
+                onClick={() => pick(song)}
+                className="flex w-full items-center gap-3 px-3 py-2 text-left transition hover:bg-[#14532d] focus:bg-[#14532d] focus:outline-none"
+              >
+                {song.art ? (
+                  <img src={song.art} alt="" className="h-10 w-10 shrink-0 border-2 border-[#05030a] object-cover" />
+                ) : (
+                  <span className="font-pixel flex h-10 w-10 shrink-0 items-center justify-center border-2 border-[#05030a] bg-[#14532d] text-[10px] text-[#1ed760]">♪</span>
+                )}
+                <span className="min-w-0 flex-1">
+                  <span className="font-vt block truncate text-xl leading-5 text-[#eafff1]">{song.name}</span>
+                  <span className="font-vt block truncate text-lg leading-5 text-[#a7f3c0]/60">{song.artist}</span>
+                </span>
+                <span className="font-pixel text-[8px] text-[#1ed760]">+ ADD</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function PotionStash({ items, isDragging, error, onAddText, onAddFiles, onAddSong, onRemove, onBrew }) {
   const [draft, setDraft] = useState("");
   const fileInput = useRef(null);
   const isFull = items.length >= MAX_ITEMS;
@@ -1121,7 +1268,7 @@ function PotionStash({ items, isDragging, error, onAddText, onAddFiles, onRemove
           {items.length === 0 && !isDragging && (
             <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center p-4">
               <div className="border-4 border-[#2a170c] bg-[#120b10]/85 px-5 py-4 text-center">
-                <p className="font-pixel text-[9px] leading-5 text-orange-200 sm:text-[10px]">DROP IMAGES OR TEXT HERE</p>
+                <p className="font-pixel text-[9px] leading-5 text-orange-200 sm:text-[10px]">DROP IMAGES, TEXT OR SONGS HERE</p>
                 <p className="font-vt mt-1 text-lg text-purple-200/60">Each ingredient becomes a potion on the shelf.</p>
               </div>
             </div>
@@ -1182,6 +1329,7 @@ function PotionStash({ items, isDragging, error, onAddText, onAddFiles, onRemove
           }}
         />
       </form>
+      <SongSearch disabled={isFull} onAddSong={onAddSong} />
       <p className="font-vt mt-2 text-center text-lg text-purple-200/50">
         {items.length}/{MAX_ITEMS} ingredients · drag, drop, or paste anywhere
       </p>
@@ -1613,6 +1761,19 @@ export default function App() {
     setItems((current) => [...current, ingredient]);
   }, []);
 
+  const addSong = useCallback((song) => {
+    if (itemsRef.current.length >= MAX_ITEMS) {
+      setError(`The shelves are full: ${MAX_ITEMS} ingredients max.`);
+      return;
+    }
+    if (itemsRef.current.some((item) => item.type === "song" && item.songId === song.id)) return;
+    setError("");
+    setItems((current) => [
+      ...current,
+      newIngredient({ type: "song", songId: song.id, name: song.name, artist: song.artist, art: song.art, uri: song.uri, text: `${song.name} ${song.artist}` }),
+    ]);
+  }, []);
+
   const addFiles = useCallback(async (files) => {
     const images = files.filter((file) => file.type.startsWith("image/"));
     const accepted = images.slice(0, Math.max(0, MAX_ITEMS - itemsRef.current.length));
@@ -1735,6 +1896,7 @@ export default function App() {
                 error={error}
                 onAddText={addText}
                 onAddFiles={addFiles}
+                onAddSong={addSong}
                 onRemove={removeItem}
                 onBrew={brew}
               />
