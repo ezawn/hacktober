@@ -103,14 +103,28 @@ async function buildGemmaRequest(items) {
   };
 }
 
-async function callGemma(body) {
-  if (!CONFIG.geminiApiKey) throw new Error("Missing VITE_GEMINI_API_KEY, so the runes can't be read.");
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(CONFIG.gemmaModel)}:generateContent`;
-  const response = await fetch(url, {
+const GEMMA_FALLBACKS = ["gemma-4-31b-it", "gemma-4-26b-a4b-it"];
+
+async function requestGemma(model, body) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+  return fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-goog-api-key": CONFIG.geminiApiKey },
     body: JSON.stringify(body),
   });
+}
+
+async function callGemma(body) {
+  if (!CONFIG.geminiApiKey) throw new Error("Missing VITE_GEMINI_API_KEY, so the runes can't be read.");
+  // Gemma on the Gemini API throws transient 500/503s; retry once, then try the other Gemma 4 model.
+  const models = [CONFIG.gemmaModel, CONFIG.gemmaModel, ...GEMMA_FALLBACKS.filter((m) => m !== CONFIG.gemmaModel)];
+  let response;
+  for (const [attempt, model] of models.entries()) {
+    if (attempt > 0) await wait(800 * attempt);
+    response = await requestGemma(model, body);
+    if (response.ok || ![500, 503].includes(response.status)) break;
+    console.warn(`[Vibe Alchemist] Gemini API ${response.status} on ${model}, retrying...`, await response.text().catch(() => ""));
+  }
   if (!response.ok) {
     console.error("[Vibe Alchemist] Gemini API error", response.status, await response.text().catch(() => ""));
     throw new Error("Gemma couldn't read your stash. Give the cauldron another stir.");
