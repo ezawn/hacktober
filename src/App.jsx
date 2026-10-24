@@ -57,7 +57,9 @@ Your JSON output must contain the following keys:
 
 "seed_genres": An array of 1 to 3 Spotify API compatible genre strings (e.g., "synth-pop", "chill").
 
-"target_audio_features": An object containing float values (0.0 to 1.0) for: "target_valence", "target_energy", and "target_tempo" (BPM).`;
+"target_audio_features": An object containing float values (0.0 to 1.0) for: "target_valence", "target_energy", and "target_tempo" (BPM).
+
+"song_suggestions": An array of 8 real, well-known, released songs that match the_fusion, each an object {"title": "...", "artist": "..."}. Only suggest songs you are confident exist on Spotify, with the exact title and primary artist. Vary the artists.`;
 
 /* ----------------------------------------------------------------------------
  * AI + Spotify pipeline
@@ -163,7 +165,7 @@ function normalizeReading(data) {
 
   const genres = data.seed_genres
     .filter((genre) => typeof genre === "string")
-    .map((genre) => genre.trim().toLowerCase().replace(/\s+/g, "-"))
+    .map((genre) => genre.trim().toLowerCase().replace(/-/g, " ").replace(/\s+/g, " "))
     .filter(Boolean)
     .slice(0, 3);
   const valence = Number(features.target_valence);
@@ -171,8 +173,15 @@ function normalizeReading(data) {
   const tempo = Number(features.target_tempo);
   if (!genres.length || ![valence, energy, tempo].every(Number.isFinite)) throw garbled;
 
+  const suggestions = (Array.isArray(data.song_suggestions) ? data.song_suggestions : [])
+    .filter((song) => typeof song?.title === "string" && typeof song?.artist === "string")
+    .map((song) => ({ title: song.title.trim(), artist: song.artist.trim() }))
+    .filter((song) => song.title && song.artist)
+    .slice(0, 10);
+
   return {
     playlist_title: data.playlist_title.trim(),
+    song_suggestions: suggestions,
     fusion_breakdown: Object.fromEntries(FUSION_KEYS.map((key) => [key, fusion[key].trim()])),
     seed_genres: genres,
     target_audio_features: {
@@ -251,19 +260,46 @@ function interleave(lists, count) {
   return picked;
 }
 
+const simplify = (text) =>
+  text
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\(.*?\)|\[.*?\]|-.*remaster.*$/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+
+// Find the exact song Gemma suggested; reject loose matches so we never return a random track.
+async function findSuggestedTrack(song, token) {
+  const results = await searchTracks(`track:"${song.title}" artist:"${song.artist}"`, token).catch(() => []);
+  const title = simplify(song.title);
+  const artist = simplify(song.artist);
+  return (
+    results.find(
+      (track) =>
+        simplify(track.name).includes(title) &&
+        (track.artists ?? []).some((a) => simplify(a.name) && (simplify(a.name).includes(artist) || artist.includes(simplify(a.name)))),
+    ) ?? null
+  );
+}
+
 async function summonTracks(reading) {
   if (CONFIG.mockSpotify) {
-    console.info("[Vibe Alchemist] mock mode: Spotify searches that would be sent", reading.seed_genres);
+    console.info("[Vibe Alchemist] mock mode: Spotify searches that would be sent", reading.song_suggestions, reading.seed_genres);
     await wait(1100);
     return mockSpotifyResponse(reading).tracks.map(normalizeTrack);
   }
   const token = await getSpotifyToken();
-  const byGenre = await Promise.all(reading.seed_genres.map((genre) => searchTracks(`genre:"${genre}"`, token, Math.floor(Math.random() * 20))));
-  let tracks = interleave(byGenre, 5);
+
+  const found = (await Promise.all(reading.song_suggestions.map((song) => findSuggestedTrack(song, token)))).filter(Boolean);
+  let tracks = interleave([found], 5);
+
   if (tracks.length < 5) {
-    // Gemma sometimes invents genre names Spotify doesn't tag; fall back to the mood words.
-    const extra = await searchTracks(reading.fusion_breakdown.the_fusion, token);
-    tracks = interleave([tracks, extra], 5);
+    // Top genre-tagged results (offset 0 = most relevant) fill any gaps.
+    const byGenre = await Promise.all(
+      reading.seed_genres.map((genre) => searchTracks(`genre:"${genre}"`, token).catch(() => [])),
+    );
+    tracks = interleave([tracks, ...byGenre], 5);
   }
   if (!tracks.length) throw new Error("No tracks matched this mood. Try different ingredients.");
   return tracks.map(normalizeTrack);
