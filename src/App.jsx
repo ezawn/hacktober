@@ -806,7 +806,7 @@ const SKELETON_PALETTE = { w: "#f4ecd8", k: "#120c18" };
  * ------------------------------------------------------------------------- */
 
 const GLOBAL_CSS = `
-  body { margin: 0; background: #07040b; }
+  body { margin: 0; background: #040207; }
   .font-pixel { font-family: "Press Start 2P", ui-monospace, monospace; }
   .font-vt { font-family: "VT323", ui-monospace, monospace; }
 
@@ -937,11 +937,11 @@ function Cobweb({ className }) {
 function BackgroundScene() {
   return (
     <div aria-hidden="true" className="pointer-events-none fixed inset-0 overflow-hidden">
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_50%_30%,#2a1440_0%,#140a1f_45%,#07040b_100%)]" />
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_50%_30%,#1c0d2c_0%,#0d0716_45%,#040207_100%)]" />
       {STARS.map(([left, top, delay], i) => (
         <span
           key={i}
-          className="twinkle absolute h-[3px] w-[3px] bg-[#d8c7f5]"
+          className="twinkle absolute h-[3px] w-[3px] bg-[#b9a8d8]"
           style={{ left: `${left}%`, top: `${top}%`, animationDelay: `${delay}s` }}
         />
       ))}
@@ -976,7 +976,7 @@ function BackgroundScene() {
         <Pumpkin scale={3} delay={1.1} />
         <Candle delay={0.15} />
       </div>
-      <div className="absolute inset-x-0 bottom-0 h-40 bg-gradient-to-t from-[#1d3b1a]/35 via-[#2a1440]/15 to-transparent" />
+      <div className="absolute inset-x-0 bottom-0 h-40 bg-gradient-to-t from-[#132a11]/30 via-[#1c0d2c]/15 to-transparent" />
     </div>
   );
 }
@@ -1271,42 +1271,191 @@ function IngredientInput({ mode, disabled, onAddText, onAddFiles, onAddSong }) {
 }
 
 /* ----------------------------------------------------------------------------
- * The cauldron stage: the witch GIF, the ingredient ledge, and the big pour
+ * The cauldron stage: the witch (animated, cut out of the GIF), a big pixel
+ * cauldron drawn in code, a small fire beneath it, and the big pour
  * ------------------------------------------------------------------------- */
 
-// public/witch.gif is 400x225 with the art in x 72..336. We crop to that band and
-// mirror it so the witch stands right of the cauldron.
-const GIF = { width: 400, cropLeft: 72, cropWidth: 264, height: 225 };
-const MOUTH = { x: 0.42, y: 0.6 }; // centre of the cauldron's mouth, as a fraction of the stage
+// Stage layout in "GIF pixels" (the witch animation's own pixel grid), so every
+// layer lines up at any screen size. public/witch.webp is the witch alone,
+// mirrored, 154x225, cut out of the original GIF with the cauldron and fire removed.
+const STAGE = { w: 330, h: 300 };
+const WITCH = { src: "/witch.webp", left: 172, top: 6, w: 154, h: 225 };
+const POT_PX = 3; // one cauldron art pixel = 3 GIF pixels, matching the witch's chunky pixels
+const POT_POS = { left: 0, top: 110 };
+
+// A big round cauldron, generated so it stays crisp and easy to tweak.
+const BIG_POT = (() => {
+  const W = 76;
+  const H = 60;
+  const cx = 37.5;
+  const g = Array.from({ length: H }, () => Array(W).fill("."));
+  const put = (x, y, c) => {
+    if (x >= 0 && x < W && y >= 0 && y < H) g[y][x] = c;
+  };
+
+  // legs first so the belly overlaps their tops
+  for (const legX of [cx - 24, cx + 17]) {
+    for (let y = 44; y < 57; y += 1) for (let x = Math.round(legX); x < Math.round(legX) + 7; x += 1) put(x, y, y > 53 ? "d" : "b");
+  }
+
+  // belly
+  const cy = 27;
+  const rx = 35;
+  const ry = 23;
+  for (let y = 6; y <= 50; y += 1) {
+    const t = (y - cy) / ry;
+    let half = rx * Math.sqrt(Math.max(0, 1 - t * t));
+    if (y < cy) half = Math.max(half, 31);
+    for (let x = 0; x < W; x += 1) {
+      const u = (x + 0.5 - cx) / half;
+      if (Math.abs(u) > 1) continue;
+      const v = t;
+      let c = "b";
+      if (u > 0.5 || v > 0.55) c = "d";
+      if (u > 0.8 || v > 0.8) c = "e";
+      if (u > -0.78 && u < -0.42 && v > -0.55 && v < 0.35) c = "m";
+      if (u > -0.68 && u < -0.56 && v > -0.4 && v < 0.05) c = "h";
+      put(x, y, c);
+    }
+  }
+  // twinkle on the belly
+  for (const [dx, dy] of [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1], [0, 2], [0, -2]]) put(56 + dx, 20 + dy, "s");
+
+  // handles
+  for (const side of [-1, 1]) {
+    const hx = cx + side * 36.5;
+    for (let y = 11; y <= 23; y += 1) {
+      for (let x = Math.floor(hx - 5); x <= Math.ceil(hx + 5); x += 1) {
+        const d = Math.hypot((x + 0.5 - hx) / 4.6, (y + 0.5 - 17) / 5.6);
+        if (d <= 1 && d >= 0.55 && g[y][x] === ".") put(x, y, d < 0.75 ? "r" : "m");
+      }
+    }
+  }
+
+  // rim (an ellipse ring) and the potion inside it
+  const ey = 5.5;
+  for (let y = 0; y <= 11; y += 1) {
+    for (let x = 0; x < W; x += 1) {
+      const outer = ((x + 0.5 - cx) / 37.5) ** 2 + ((y + 0.5 - ey) / 5.6) ** 2;
+      const inner = ((x + 0.5 - cx) / 31.5) ** 2 + ((y + 0.5 - ey) / 3.6) ** 2;
+      if (inner <= 1) put(x, y, y < ey - 1.5 ? "D" : y < ey + 0.5 ? "L" : "l");
+      else if (outer <= 1) put(x, y, y < ey ? "R" : "r");
+    }
+  }
+  for (const [x, y] of [[20, 6], [21, 6], [44, 5], [45, 5], [46, 5], [30, 7], [55, 7]]) put(x, y, "w");
+
+  // dark outline around everything
+  const out = g.map((row) => [...row]);
+  for (let y = 0; y < H; y += 1) {
+    for (let x = 0; x < W; x += 1) {
+      if (g[y][x] !== ".") continue;
+      if ([[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => g[y + dy]?.[x + dx] && g[y + dy][x + dx] !== ".")) out[y][x] = "k";
+    }
+  }
+  return out.map((row) => row.join(""));
+})();
+const BIG_POT_PALETTE = {
+  k: "#08050d", e: "#141019", d: "#1d1828", b: "#2a2438", m: "#3e3654", h: "#6d6290", s: "#b7aadf",
+  r: "#4a4166", R: "#7d70a6", D: "#2f8f1a", L: "#4cc226", l: "#7be43f", w: "#d5ffb0",
+};
+
+const STEAM = [".g.", "g..", "g..", ".g.", "..g", "..g", ".g.", "g..", "g..", ".g."];
+const STEAM_PALETTE = { g: "#6bdc3a" };
+
+const pct = (value, total) => `${(value / total) * 100}%`;
+
+// centre of the cauldron's mouth, as a fraction of the stage
+const MOUTH = {
+  x: (POT_POS.left + 37.5 * POT_PX) / STAGE.w,
+  y: (POT_POS.top + 5.5 * POT_PX) / STAGE.h,
+};
 const MINI_SCALE = 4;
 const DROP_STAGGER = 0.18;
 const DROP_DURATION = 0.9;
 
-function WitchGif() {
+const POT_BUBBLES = [
+  { x: -22, delay: 0, size: 4 },
+  { x: 6, delay: 0.7, size: 6 },
+  { x: 24, delay: 1.3, size: 4 },
+  { x: -6, delay: 1.9, size: 5 },
+];
+
+function CauldronArt({ brewing }) {
+  const potW = BIG_POT[0].length * POT_PX;
+  const potH = BIG_POT.length * POT_PX;
   return (
-    <div
-      aria-hidden="true"
-      className="absolute inset-0 [isolation:isolate]"
-      style={{
-        maskImage: "radial-gradient(ellipse 72% 78% at 50% 48%, #000 62%, transparent 100%)",
-        WebkitMaskImage: "radial-gradient(ellipse 72% 78% at 50% 48%, #000 62%, transparent 100%)",
-      }}
-    >
-      {/* Same tone as the night sky here; "lighten" turns the GIF's black backdrop into it. */}
-      <div className="absolute inset-0 bg-[#170c24]" />
-      <div className="absolute inset-0 overflow-hidden [mix-blend-mode:lighten]" style={{ transform: "scaleX(-1)" }}>
-        <img
-          src="/witch.gif"
-          alt=""
-          draggable={false}
-          className="absolute top-0 h-full max-w-none select-none [image-rendering:pixelated]"
-          style={{
-            width: `${(GIF.width / GIF.cropWidth) * 100}%`,
-            left: `${(-GIF.cropLeft / GIF.cropWidth) * 100}%`,
-          }}
-        />
+    <div aria-hidden="true" className="absolute inset-0">
+      {/* fire: small, tucked under the cauldron between its legs */}
+      <div
+        className="absolute flex items-end justify-center gap-[2%]"
+        style={{ left: pct(POT_POS.left + 26 * POT_PX, STAGE.w), width: pct(24 * POT_PX, STAGE.w), top: pct(POT_POS.top + 44 * POT_PX, STAGE.h), height: pct(13 * POT_PX, STAGE.h) }}
+      >
+        <div className="absolute inset-x-0 bottom-0 h-full rounded-full bg-orange-500/40 blur-xl" />
+        {[0, 0.2, 0.1].map((delay, i) => (
+          <div key={i} className="flicker relative" style={{ animationDelay: `${delay}s`, width: i === 1 ? "30%" : "22%" }}>
+            <PixelSprite art={FLAME} palette={FLAME_PALETTE} className="h-auto w-full" />
+          </div>
+        ))}
+        <div className="absolute inset-x-[6%] bottom-0 h-[16%] border-2 border-[#1a0d06] bg-[#5a3420]" />
       </div>
+
+      {/* the cauldron */}
+      <PixelSprite
+        art={BIG_POT}
+        palette={BIG_POT_PALETTE}
+        className="absolute h-auto"
+        style={{ left: pct(POT_POS.left, STAGE.w), top: pct(POT_POS.top, STAGE.h), width: pct(potW, STAGE.w) }}
+      />
+
+      {/* bubbles popping on the potion */}
+      {POT_BUBBLES.map((bubble, i) => (
+        <motion.span
+          key={i}
+          className="absolute border border-[#1a4d0a] bg-[#7be43f]"
+          style={{
+            left: pct(POT_POS.left + (37.5 + bubble.x) * POT_PX, STAGE.w),
+            top: pct(POT_POS.top + 5 * POT_PX, STAGE.h),
+            width: pct(bubble.size * POT_PX * 0.7, STAGE.w),
+            aspectRatio: "1",
+          }}
+          animate={{ scale: [0, 1, 1.25, 0], y: [0, -2, -4, -4] }}
+          transition={{ duration: brewing ? 0.9 : 1.6, delay: bubble.delay * (brewing ? 0.5 : 1), repeat: Infinity, ease: stepEase }}
+        />
+      ))}
+
+      {/* steam curling up out of the pot */}
+      {[-18, 4, 22].map((x, i) => (
+        <motion.div
+          key={x}
+          className="absolute"
+          style={{ left: pct(POT_POS.left + (37.5 + x) * POT_PX, STAGE.w), top: pct(POT_POS.top - 34, STAGE.h), width: pct(3 * POT_PX, STAGE.w) }}
+          animate={{ y: [10, -18], opacity: [0, 0.9, 0], scaleX: [1, -1, 1] }}
+          transition={{ duration: brewing ? 1.4 : 2.6, delay: i * 0.8, repeat: Infinity, ease: stepEase }}
+        >
+          <PixelSprite art={STEAM} palette={STEAM_PALETTE} className="h-auto w-full" />
+        </motion.div>
+      ))}
     </div>
+  );
+}
+
+function WitchSprite() {
+  return (
+    <img
+      src={WITCH.src}
+      alt=""
+      aria-hidden="true"
+      draggable={false}
+      className="absolute select-none [image-rendering:pixelated]"
+      style={{
+        left: pct(WITCH.left, STAGE.w),
+        top: pct(WITCH.top, STAGE.h),
+        width: pct(WITCH.w, STAGE.w),
+        // her robe trails off into mist rather than ending in a hard edge
+        maskImage: "linear-gradient(to bottom, #000 72%, transparent 97%)",
+        WebkitMaskImage: "linear-gradient(to bottom, #000 72%, transparent 97%)",
+      }}
+    />
   );
 }
 
@@ -1469,15 +1618,16 @@ function CauldronStage({ items, brewing, onRemove }) {
       </div>
 
       {/* The witch and her cauldron */}
-      <div className="relative mx-auto -mt-2 w-full max-w-[520px]" style={{ aspectRatio: `${GIF.cropWidth} / ${GIF.height}` }}>
+      <div className="relative mx-auto -mt-2 w-full max-w-[520px]" style={{ aspectRatio: `${STAGE.w} / ${STAGE.h}` }}>
         <motion.div
           aria-hidden="true"
-          className="absolute h-1/3 w-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-lime-400 blur-3xl"
+          className="absolute h-1/4 w-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-lime-400 blur-3xl"
           style={{ left: `${MOUTH.x * 100}%`, top: `${MOUTH.y * 100}%` }}
-          animate={{ opacity: brewing ? [0.2, 0.45, 0.2] : 0.12 }}
+          animate={{ opacity: brewing ? [0.18, 0.4, 0.18] : 0.1 }}
           transition={brewing ? { duration: 1.2, repeat: Infinity } : { duration: 0.4 }}
         />
-        <WitchGif />
+        <WitchSprite />
+        <CauldronArt brewing={brewing} />
         <span ref={mouthRef} aria-hidden="true" className="absolute h-0 w-0" style={{ left: `${MOUTH.x * 100}%`, top: `${MOUTH.y * 100}%` }} />
         {brewing && items.map((item, i) => <Splash key={item.id} delay={i * DROP_STAGGER + DROP_DURATION * 0.9} />)}
       </div>
@@ -1961,7 +2111,7 @@ export default function App() {
   return (
     <MotionConfig reducedMotion="user">
       <main
-        className="relative min-h-screen overflow-x-hidden bg-[#07040b] text-[#f5e9ff]"
+        className="relative min-h-screen overflow-x-hidden bg-[#040207] text-[#f5e9ff]"
         onDragEnter={(event) => {
           event.preventDefault();
           if (stage !== "stash") return;
