@@ -4,7 +4,7 @@ import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 /* ============================================================================
  * MUSIC CAULDRON
  * Drop images + text into the Potion Stash -> Gemma 4 (via the Gemini API)
- * fuses them into one mood -> Spotify Search turns its genres into 5 songs.
+ * fuses them into one mood -> Spotify Search turns its ideas into a 20-song playlist.
  *
  * Runs fully simulated by default. To hit the real APIs, put in .env.local:
  *   VITE_USE_MOCKS=false
@@ -36,6 +36,8 @@ const CONFIG = {
 };
 
 const MAX_ITEMS = 12;
+const PLAYLIST_SIZE = 20;
+const SUGGESTION_COUNT = 26; // ask for extra: a few never match on Spotify
 const MAX_TEXT_LENGTH = 400;
 const MIN_BREW_MS = 1200; // just long enough to see the cauldron bubble
 
@@ -61,7 +63,7 @@ Your JSON output must contain the following keys:
 
 "target_audio_features": An object containing float values (0.0 to 1.0) for: "target_valence", "target_energy", and "target_tempo" (BPM).
 
-"song_suggestions": An array of 8 real, well-known, released songs that match the_fusion, each an object {"title": "...", "artist": "..."}. Only suggest songs you are confident exist on Spotify, with the exact title and primary artist. Music tracks only: no podcasts, episodes, audiobooks, documentaries, interviews, skits or spoken word. Vary the artists.`;
+"song_suggestions": An array of ${SUGGESTION_COUNT} real, well-known, released songs that match the_fusion (and the target_audio_features), each an object {"title": "...", "artist": "..."}. Only suggest songs you are confident exist on Spotify, with the exact title and primary artist. Music tracks only: no podcasts, episodes, audiobooks, documentaries, interviews, skits or spoken word. Vary the artists: at most 2 songs per artist.`;
 
 /* ----------------------------------------------------------------------------
  * AI + Spotify pipeline
@@ -201,7 +203,7 @@ function normalizeReading(data) {
     .filter((song) => typeof song?.title === "string" && typeof song?.artist === "string")
     .map((song) => ({ title: song.title.trim(), artist: song.artist.trim() }))
     .filter((song) => song.title && song.artist)
-    .slice(0, 10);
+    .slice(0, SUGGESTION_COUNT + 4);
 
   return {
     playlist_title: data.playlist_title.trim(),
@@ -434,6 +436,20 @@ function isSong(track) {
 }
 
 // Take tracks round-robin across genres so one genre doesn't swamp the playlist.
+// Run fn over items with at most `limit` in flight; results keep their order.
+async function mapLimit(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i], i);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
 function interleave(lists, count) {
   const picked = [];
   const seen = new Set();
@@ -480,14 +496,21 @@ async function summonTracks(reading) {
   }
   const token = await getSpotifyToken();
 
-  // Look up Gemma's suggestions and the genre top-ups in one parallel round trip
-  // (genre results are only used if fewer than 5 suggestions are found).
-  const [found, byGenre] = await Promise.all([
-    Promise.all(reading.song_suggestions.map((song) => findSuggestedTrack(song, token))),
-    Promise.all(reading.seed_genres.map((genre) => searchTracks(`genre:"${genre}"`, token).catch(() => []))),
+  // Look up Gemma's suggestions and the genre top-ups together, a few at a time so a
+  // 30-odd request burst doesn't trip Spotify's rate limit. Genre results only fill
+  // whatever gap is left after the suggestions.
+  const genreQueries = reading.seed_genres.flatMap((genre) => [0, 10].map((offset) => [genre, offset]));
+  const [found, genrePages] = await Promise.all([
+    mapLimit(reading.song_suggestions, 6, (song) => findSuggestedTrack(song, token)),
+    mapLimit(genreQueries, 3, ([genre, offset]) => searchTracks(`genre:"${genre}"`, token, offset).catch(() => [])),
   ]);
-  let tracks = interleave([found.filter(Boolean)], 5);
-  if (tracks.length < 5) tracks = interleave([tracks, ...byGenre], 5);
+  const byGenre = reading.seed_genres.map((_, i) => [...genrePages[i * 2], ...genrePages[i * 2 + 1]]);
+  let tracks = interleave([found.filter(Boolean)], PLAYLIST_SIZE);
+  if (tracks.length < PLAYLIST_SIZE) {
+    const seen = new Set(tracks.map((track) => track.id));
+    const extra = interleave(byGenre.map((list) => list.filter((track) => !seen.has(track.id))), PLAYLIST_SIZE - tracks.length);
+    tracks = [...tracks, ...extra];
+  }
   if (!tracks.length) throw new Error("No tracks matched this mood. Try different ingredients.");
   return tracks.map(normalizeTrack);
 }
@@ -577,8 +600,10 @@ function pickMockBrew(items) {
 // A flat track list, same track shape as Spotify Search results so normalizeTrack() is exercised too.
 function mockSpotifyResponse(reading) {
   const brew = MOCK_BREWS.find((entry) => entry.reading.playlist_title === reading.playlist_title) ?? MOCK_BREWS[0];
+  // the brew's own tracks first, then the other demo brews' so demo playlists are longer too
+  const pool = [...brew.tracks, ...MOCK_BREWS.filter((entry) => entry !== brew).flatMap((entry) => entry.tracks)];
   return {
-    tracks: brew.tracks.map(([name, artist], index) => ({
+    tracks: pool.slice(0, PLAYLIST_SIZE).map(([name, artist], index) => ({
       id: `mock-${index}`,
       name,
       artists: [{ name: artist }],
@@ -1605,7 +1630,7 @@ function Splash({ delay }) {
 
 const BREW_STEPS = [
   { id: "gemma", label: "READING THE RUNES", detail: "Gemma 4 is fusing your ingredients" },
-  { id: "spotify", label: "SUMMONING TRACKS", detail: "Spotify is matching five songs to the mood" },
+  { id: "spotify", label: "SUMMONING TRACKS", detail: "Spotify is matching twenty songs to the mood" },
 ];
 
 function BrewStatus({ phase }) {
