@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 
 /* ============================================================================
@@ -760,58 +760,6 @@ const BOTTLE_PALETTES = [
   { L: "#f472b6", D: "#be185d" },
   { L: "#22d3ee", D: "#0e7490" },
 ].map((liquid) => ({ ...BOTTLE_BASE_PALETTE, ...liquid }));
-const BOTTLE_SCALE = 5;
-
-const WITCH = [
-  ".........kk.......",
-  "........kPk.......",
-  ".......kPPk.......",
-  "......kPPPPk......",
-  "......kPPPPk......",
-  ".....kPPPPPPk.....",
-  ".....kbbbbbbk.....",
-  ".kkkkkkkkkkkkkkkk.",
-  "....HHggggggHH....",
-  "....HgeggggegH....",
-  "....HgggNNgggH....",
-  "...HHggggNgggHH...",
-  "...HHggkkkkggHH...",
-  "...HH.gggggg.HH...",
-  "..HHRRRRRRRRRRHH..",
-  ".RRRRRRrRRrRRRRRR.",
-  "RRRRRRRrRRrRRRRRRR",
-  "RRRRRRRRRRRRRRRRRR",
-  "RRRRRRRRRRRRRRRRRR",
-];
-const WITCH_PALETTE = {
-  k: "#0d0814", P: "#4a2470", b: "#f97316", H: "#1c1026", g: "#65a30d",
-  e: "#facc15", N: "#4d7c0f", R: "#4c1d95", r: "#2e1065",
-};
-
-const CAULDRON = (() => {
-  const width = 28;
-  const row = (pad, body) => ".".repeat(pad) + body + ".".repeat(width - pad - body.length);
-  const belly = (pad, inner) => row(pad, "kjh" + "i".repeat(inner) + "jjk");
-  return [
-    row(2, "k".repeat(24)),
-    row(1, "k" + "G".repeat(24) + "k"),
-    row(0, "kkgg" + "G".repeat(20) + "ggkk"),
-    row(0, "k" + "I".repeat(26) + "k"),
-    belly(0, 22),
-    belly(0, 22),
-    belly(0, 22),
-    belly(1, 20),
-    belly(1, 20),
-    belly(2, 18),
-    row(3, "kjj" + "j".repeat(16) + "jjk"),
-    row(4, "k".repeat(20)),
-    row(5, "kkk" + ".".repeat(12) + "kkk"),
-    row(5, "kk" + ".".repeat(14) + "kk"),
-  ];
-})();
-const CAULDRON_PALETTE = {
-  k: "#0b0910", G: "#a3e635", g: "#4d7c0f", I: "#4b4560", i: "#2b2638", j: "#1a1624", h: "#5a5272",
-};
 
 const SKELETON = [
   "....wwwwww........",
@@ -861,6 +809,12 @@ const GLOBAL_CSS = `
       linear-gradient(115deg, transparent 30%, rgba(255,214,150,.07) 45%, transparent 60%),
       repeating-linear-gradient(90deg, #22161d 0 46px, #1a1016 46px 48px);
     background-size: 100% 136px, 100% 100%, auto;
+  }
+
+  .shelf-plank {
+    height: 18px;
+    background: linear-gradient(to bottom, #b8784a 0 3px, #8a5a32 3px 10px, #6b4226 10px 14px, #3a2216 14px 16px, #120804 16px);
+    box-shadow: 0 6px 0 rgba(5,3,10,.6);
   }
 
   .parchment {
@@ -1021,96 +975,6 @@ function BackgroundScene() {
 const CHUNKY_BUTTON =
   "font-pixel border-4 border-[#0b0610] shadow-[4px_4px_0_#05030a] transition active:translate-x-[2px] active:translate-y-[2px] active:shadow-[2px_2px_0_#05030a] disabled:cursor-not-allowed disabled:opacity-40";
 
-const PUFF = [[-30, -6], [-20, -18], [0, -24], [20, -18], [30, -6]];
-
-function SpawnPuff() {
-  return (
-    <div aria-hidden="true" className="pointer-events-none absolute bottom-0 left-1/2">
-      {PUFF.map(([x, y], i) => (
-        <motion.span
-          key={i}
-          className="absolute h-2 w-2 bg-[#f5e6c8]"
-          initial={{ x: 0, y: 0, opacity: 0 }}
-          animate={{ x, y, opacity: [0, 1, 0] }}
-          transition={{ delay: 0.25, duration: 0.5, ease: "easeOut" }}
-        />
-      ))}
-    </div>
-  );
-}
-
-function PotionBottle({ item, index, onRemove }) {
-  const s = BOTTLE_SCALE;
-  const label = item.type === "image" ? item.name : item.type === "song" ? `${item.name} by ${item.artist}` : item.text;
-  return (
-    <motion.div
-      layout
-      exit={{ opacity: 0, scale: 0.4, transition: { duration: 0.2 } }}
-      className="group relative flex items-end justify-center pb-[14px]"
-    >
-      <motion.div
-        className="relative"
-        title={label}
-        initial={{ y: -160, opacity: 0, rotate: index % 2 ? 16 : -16 }}
-        animate={{ y: 0, opacity: 1, rotate: 0 }}
-        transition={{ type: "spring", stiffness: 320, damping: 16 }}
-        whileHover={{ rotate: [0, -5, 5, 0], transition: { duration: 0.45 } }}
-      >
-        <PixelSprite art={BOTTLE} palette={BOTTLE_PALETTES[item.hue % BOTTLE_PALETTES.length]} scale={s} />
-        <div
-          className="absolute overflow-hidden border-2 border-[#3b2414] bg-[#f1dcab]"
-          style={{ left: 3 * s, top: 9 * s, width: 10 * s, height: 6 * s }}
-        >
-          {item.type === "image" ? (
-            <img src={item.thumb} alt={item.name} className="h-full w-full object-cover [image-rendering:pixelated]" />
-          ) : item.type === "song" && item.art ? (
-            <div className="relative h-full w-full">
-              <img src={item.art} alt={label} className="h-full w-full object-cover" />
-              <span className="font-pixel absolute bottom-0 right-0 bg-[#3b2414] px-[2px] text-[6px] leading-[8px] text-[#ffcf7a]">♪</span>
-            </div>
-          ) : item.type === "song" ? (
-            <p className="font-vt line-clamp-2 break-words px-0.5 text-[13px] leading-[12px] text-[#3b2414]">♪ {item.name}</p>
-          ) : (
-            <p className="font-vt line-clamp-2 break-words px-0.5 text-[13px] leading-[12px] text-[#3b2414]">{item.text}</p>
-          )}
-        </div>
-        <SpawnPuff />
-      </motion.div>
-      <button
-        type="button"
-        onClick={() => onRemove(item.id)}
-        aria-label={`Remove ${item.type === "text" ? "text ingredient" : label}`}
-        className="font-pixel absolute right-1 top-3 h-6 w-6 border-2 border-[#0b0610] bg-[#7f1d1d] text-[8px] text-white opacity-0 transition focus:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100"
-      >
-        x
-      </button>
-    </motion.div>
-  );
-}
-
-const MOTES = Array.from({ length: 10 }, (_, i) => ({
-  left: ((i * 29) % 95) + 2,
-  top: ((i * 41) % 80) + 10,
-  delay: i * 0.7,
-  duration: 6 + (i % 4),
-}));
-
-function DustMotes() {
-  return (
-    <div aria-hidden="true" className="pointer-events-none absolute inset-0">
-      {MOTES.map((mote, i) => (
-        <motion.span
-          key={i}
-          className="absolute h-[3px] w-[3px] bg-[#e9d8b4]"
-          style={{ left: `${mote.left}%`, top: `${mote.top}%` }}
-          animate={{ y: [0, -36], x: [0, 8, -4], opacity: [0, 0.55, 0] }}
-          transition={{ duration: mote.duration, delay: mote.delay, repeat: Infinity, ease: "linear" }}
-        />
-      ))}
-    </div>
-  );
-}
-
 function SongSearch({ disabled, onAddSong }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState([]);
@@ -1156,14 +1020,14 @@ function SongSearch({ disabled, onAddSong }) {
 
   return (
     <div
-      className="relative mt-3"
+      className="relative"
       onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
       }}
     >
       <label htmlFor="song-search" className="sr-only">Search Spotify for a song to add</label>
-      <div className="flex items-center gap-2 border-4 border-[#14532d] bg-[#07140c] px-3 focus-within:border-[#1ed760]">
-        <span aria-hidden="true" className="font-pixel text-[10px] text-[#1ed760]">♪</span>
+      <div className={INPUT_BAR}>
+        <span aria-hidden="true" className="font-pixel text-[10px] text-[#4ade80]">♪</span>
         <input
           id="song-search"
           type="search"
@@ -1180,7 +1044,7 @@ function SongSearch({ disabled, onAddSong }) {
             }
           }}
           placeholder="search Spotify for a song to add…"
-          className="font-vt min-w-0 flex-1 bg-transparent py-2 text-xl text-[#eafff1] outline-none placeholder:text-[#a7f3c0]/35 disabled:opacity-50"
+          className="font-vt min-w-0 flex-1 bg-transparent py-2 text-xl text-[#eef0ff] outline-none placeholder:text-[#c7d2ff]/35 disabled:opacity-50"
         />
         {status === "searching" && <span className="font-pixel blink text-[7px] text-[#1ed760]/70">...</span>}
       </div>
@@ -1188,7 +1052,7 @@ function SongSearch({ disabled, onAddSong }) {
       {open && status !== "idle" && status !== "searching" && (
         <ul
           role="listbox"
-          className="absolute left-0 right-0 top-full z-30 mt-1 max-h-80 overflow-y-auto border-4 border-[#14532d] bg-[#07140c] shadow-[6px_6px_0_#05030a]"
+          className="absolute left-0 right-0 top-full z-50 mt-1 max-h-80 overflow-y-auto border-4 border-[#3b5bdb] bg-[#0b0c24] shadow-[6px_6px_0_#05030a]"
         >
           {status === "error" && <li className="font-vt px-3 py-2 text-lg text-red-300">Spotify search failed. Check your keys and try again.</li>}
           {status === "done" && !results.length && <li className="font-vt px-3 py-2 text-lg text-[#a7f3c0]/60">No songs found.</li>}
@@ -1197,7 +1061,7 @@ function SongSearch({ disabled, onAddSong }) {
               <button
                 type="button"
                 onClick={() => pick(song)}
-                className="flex w-full items-center gap-3 px-3 py-2 text-left transition hover:bg-[#14532d] focus:bg-[#14532d] focus:outline-none"
+                className="flex w-full items-center gap-3 px-3 py-2 text-left transition hover:bg-[#1e2a6b] focus:bg-[#1e2a6b] focus:outline-none"
               >
                 {song.art ? (
                   <img src={song.art} alt="" className="h-10 w-10 shrink-0 border-2 border-[#05030a] object-cover" />
@@ -1218,10 +1082,108 @@ function SongSearch({ disabled, onAddSong }) {
   );
 }
 
-function PotionStash({ items, isDragging, error, onAddText, onAddFiles, onAddSong, onRemove, onBrew }) {
+const PUFF = [[-30, -6], [-20, -18], [0, -24], [20, -18], [30, -6]];
+
+function SpawnPuff() {
+  return (
+    <div aria-hidden="true" className="pointer-events-none absolute bottom-0 left-1/2">
+      {PUFF.map(([x, y], i) => (
+        <motion.span
+          key={i}
+          className="absolute h-2 w-2 bg-[#f5e6c8]"
+          initial={{ x: 0, y: 0, opacity: 0 }}
+          animate={{ x, y, opacity: [0, 1, 0] }}
+          transition={{ delay: 0.25, duration: 0.5, ease: "easeOut" }}
+        />
+      ))}
+    </div>
+  );
+}
+
+// Quantized easing: things hop in chunky 8-bit steps instead of gliding.
+const stepEase = (t) => Math.round(t * 8) / 8;
+
+/* ----------------------------------------------------------------------------
+ * The category shelf: three big potions pick what kind of ingredient to add
+ * ------------------------------------------------------------------------- */
+
+const CATEGORIES = [
+  { id: "song", label: "SONGS", icon: "♪", palette: BOTTLE_PALETTES[0], glow: "#4ade80" },
+  { id: "image", label: "IMAGES", icon: "+", palette: BOTTLE_PALETTES[4], glow: "#22d3ee" },
+  { id: "text", label: "TEXT", icon: "Aa", palette: BOTTLE_PALETTES[2], glow: "#fb923c" },
+];
+const SHELF_SCALE = 6;
+const SHELF_BOTTLE_H = BOTTLE.length * SHELF_SCALE;
+
+function CategoryShelf({ mode, counts, disabled, onSelect }) {
+  const s = SHELF_SCALE;
+  return (
+    <div className="relative mx-auto w-full max-w-xl">
+      {/* the plank the three bottles stand on */}
+      <div aria-hidden="true" className="shelf-plank absolute inset-x-0 z-0" style={{ top: SHELF_BOTTLE_H }} />
+      <div role="tablist" aria-label="Ingredient type" className="relative z-10 flex justify-around px-2">
+        {CATEGORIES.map((cat) => {
+          const active = cat.id === mode;
+          return (
+            <button
+              key={cat.id}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              disabled={disabled}
+              onClick={() => onSelect(cat.id)}
+              className="group flex flex-col items-center focus:outline-none disabled:cursor-not-allowed"
+            >
+              <motion.div
+                className="relative"
+                style={{ height: SHELF_BOTTLE_H, filter: active ? `drop-shadow(0 0 12px ${cat.glow})` : "none" }}
+                animate={active ? { y: [0, -8, 0] } : { y: 0 }}
+                transition={active ? { duration: 1.4, repeat: Infinity, ease: stepEase } : { duration: 0.2 }}
+                whileHover={active ? undefined : { rotate: [0, -6, 6, 0], transition: { duration: 0.4 } }}
+              >
+                <div className={active ? "" : "opacity-60 transition group-hover:opacity-100"}>
+                  <PixelSprite art={BOTTLE} palette={cat.palette} scale={s} />
+                </div>
+                <span
+                  className="font-pixel absolute flex items-center justify-center border-2 border-[#3b2414] bg-[#f1dcab] text-[13px] text-[#3b2414]"
+                  style={{ left: 3 * s, top: 9 * s, width: 10 * s, height: 6 * s }}
+                >
+                  {cat.icon}
+                </span>
+                {counts[cat.id] > 0 && (
+                  <span className="font-pixel absolute -right-2 top-6 border-2 border-[#0b0610] bg-[#ffcf7a] px-1 text-[8px] leading-4 text-[#2a1a10]">
+                    {counts[cat.id]}
+                  </span>
+                )}
+              </motion.div>
+              <div aria-hidden="true" className="h-[18px]" />
+              <span
+                className={`font-pixel border-4 px-2 py-1.5 text-[8px] shadow-[3px_3px_0_#05030a] transition sm:text-[9px] ${
+                  active
+                    ? "border-[#0b0610] bg-[#ffcf7a] text-[#2a1a10]"
+                    : "border-[#2a170c] bg-[#8a5a32] text-[#fde7c0] group-hover:bg-[#9a6a3e]"
+                }`}
+              >
+                {cat.label}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ----------------------------------------------------------------------------
+ * The input bar: one bar that changes with the chosen category
+ * ------------------------------------------------------------------------- */
+
+const INPUT_BAR =
+  "flex w-full items-center gap-2 border-4 border-[#3b5bdb] bg-[#0b0c24] px-3 shadow-[4px_4px_0_#05030a] transition focus-within:border-[#8ea2ff]";
+
+function IngredientInput({ mode, disabled, onAddText, onAddFiles, onAddSong }) {
   const [draft, setDraft] = useState("");
   const fileInput = useRef(null);
-  const isFull = items.length >= MAX_ITEMS;
 
   const submitDraft = (event) => {
     event.preventDefault();
@@ -1231,235 +1193,364 @@ function PotionStash({ items, isDragging, error, onAddText, onAddFiles, onAddSon
   };
 
   return (
+    <AnimatePresence mode="wait" initial={false}>
+      <motion.div
+        key={mode}
+        initial={{ opacity: 0, y: -6 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: 6 }}
+        transition={{ duration: 0.15 }}
+      >
+        {mode === "song" && <SongSearch disabled={disabled} onAddSong={onAddSong} />}
+
+        {mode === "image" && (
+          <>
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => fileInput.current?.click()}
+              className={`${INPUT_BAR} py-2 text-left hover:border-[#8ea2ff] disabled:opacity-50`}
+            >
+              <span aria-hidden="true" className="font-pixel text-[12px] text-[#22d3ee]">+</span>
+              <span className="font-vt min-w-0 flex-1 truncate text-xl text-[#c7d2ff]/60">choose images… or drop / paste them anywhere</span>
+              <span className="font-pixel border-2 border-[#0b0610] bg-[#22d3ee] px-2 py-1 text-[8px] text-[#04161a]">BROWSE</span>
+            </button>
+            <input
+              ref={fileInput}
+              type="file"
+              accept="image/*"
+              multiple
+              hidden
+              onChange={(event) => {
+                onAddFiles([...event.target.files]);
+                event.target.value = "";
+              }}
+            />
+          </>
+        )}
+
+        {mode === "text" && (
+          <form onSubmit={submitDraft} className={INPUT_BAR}>
+            <span aria-hidden="true" className="font-pixel text-[9px] text-[#fb923c]">Aa</span>
+            <label htmlFor="ingredient-text" className="sr-only">Add a text ingredient</label>
+            <input
+              id="ingredient-text"
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              maxLength={MAX_TEXT_LENGTH}
+              disabled={disabled}
+              autoComplete="off"
+              placeholder="a lyric, a feeling, a strange little thought…"
+              className="font-vt min-w-0 flex-1 bg-transparent py-2 text-xl text-[#eef0ff] outline-none placeholder:text-[#c7d2ff]/35 disabled:opacity-50"
+            />
+            <button
+              type="submit"
+              disabled={disabled || !draft.trim()}
+              className="font-pixel border-2 border-[#0b0610] bg-[#fb923c] px-2 py-1 text-[8px] text-[#1a0a00] disabled:opacity-40"
+            >
+              BOTTLE IT
+            </button>
+          </form>
+        )}
+      </motion.div>
+    </AnimatePresence>
+  );
+}
+
+/* ----------------------------------------------------------------------------
+ * The cauldron stage: the witch GIF, the ingredient ledge, and the big pour
+ * ------------------------------------------------------------------------- */
+
+// public/witch.gif is 400x225 with the art in x 72..336. We crop to that band and
+// mirror it so the witch stands right of the cauldron.
+const GIF = { width: 400, cropLeft: 72, cropWidth: 264, height: 225 };
+const MOUTH = { x: 0.42, y: 0.6 }; // centre of the cauldron's mouth, as a fraction of the stage
+const MINI_SCALE = 4;
+const DROP_STAGGER = 0.18;
+const DROP_DURATION = 0.9;
+
+function WitchGif() {
+  return (
+    <div
+      aria-hidden="true"
+      className="absolute inset-0 [isolation:isolate]"
+      style={{
+        maskImage: "radial-gradient(ellipse 72% 78% at 50% 48%, #000 62%, transparent 100%)",
+        WebkitMaskImage: "radial-gradient(ellipse 72% 78% at 50% 48%, #000 62%, transparent 100%)",
+      }}
+    >
+      {/* Same tone as the night sky here; "lighten" turns the GIF's black backdrop into it. */}
+      <div className="absolute inset-0 bg-[#170c24]" />
+      <div className="absolute inset-0 overflow-hidden [mix-blend-mode:lighten]" style={{ transform: "scaleX(-1)" }}>
+        <img
+          src="/witch.gif"
+          alt=""
+          draggable={false}
+          className="absolute top-0 h-full max-w-none select-none [image-rendering:pixelated]"
+          style={{
+            width: `${(GIF.width / GIF.cropWidth) * 100}%`,
+            left: `${(-GIF.cropLeft / GIF.cropWidth) * 100}%`,
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function potionLabel(item) {
+  if (item.type === "image") return item.name;
+  if (item.type === "song") return `${item.name} by ${item.artist}`;
+  return item.text;
+}
+
+const MiniPotion = ({ item, index, drop, onRemove, registerRef }) => {
+  const s = MINI_SCALE;
+  const label = potionLabel(item);
+  const palette =
+    item.type === "song" ? BOTTLE_PALETTES[0] : item.type === "image" ? BOTTLE_PALETTES[4] : BOTTLE_PALETTES[(item.hue % 2) + 1];
+  return (
+    <motion.div
+      ref={(el) => registerRef(item.id, el)}
+      layout={!drop}
+      initial={{ y: -60, opacity: 0, rotate: index % 2 ? 14 : -14 }}
+      animate={
+        drop
+          ? {
+              x: [0, drop.x * 0.3, drop.x],
+              y: [0, -46, drop.y],
+              rotate: [0, -25, 200],
+              scale: [1, 1.05, 0.45],
+              opacity: [1, 1, 0],
+            }
+          : { x: 0, y: 0, opacity: 1, rotate: 0, scale: 1 }
+      }
+      transition={
+        drop
+          ? { duration: DROP_DURATION, delay: index * DROP_STAGGER, times: [0, 0.3, 1], ease: "easeIn" }
+          : { type: "spring", stiffness: 320, damping: 16 }
+      }
+      exit={{ opacity: 0, scale: 0.4, transition: { duration: 0.2 } }}
+      className="group relative z-30"
+      title={label}
+    >
+      <PixelSprite art={BOTTLE} palette={palette} scale={s} />
+      <div
+        className="absolute flex items-center justify-center overflow-hidden border-2 border-[#3b2414] bg-[#f1dcab]"
+        style={{ left: 3 * s, top: 9 * s, width: 10 * s, height: 6 * s }}
+      >
+        {item.type === "image" && <img src={item.thumb} alt="" className="h-full w-full object-cover [image-rendering:pixelated]" />}
+        {item.type === "song" && item.art && <img src={item.art} alt="" className="h-full w-full object-cover" />}
+        {item.type === "song" && !item.art && <span className="font-pixel text-[9px] text-[#3b2414]">♪</span>}
+        {item.type === "text" && (
+          <span className="font-vt line-clamp-2 break-all px-px text-[11px] leading-[10px] text-[#3b2414]">{item.text}</span>
+        )}
+      </div>
+      {!drop && <SpawnPuff />}
+      {!drop && (
+        <button
+          type="button"
+          onClick={() => onRemove(item.id)}
+          aria-label={`Remove ${item.type === "text" ? "text ingredient" : label}`}
+          className="font-pixel absolute -right-1 -top-1 h-5 w-5 border-2 border-[#0b0610] bg-[#7f1d1d] text-[7px] text-white opacity-0 transition focus:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100"
+        >
+          x
+        </button>
+      )}
+    </motion.div>
+  );
+};
+
+const SPLASH = [[-26, -30], [-14, -44], [0, -52], [14, -44], [26, -30], [-34, -12], [34, -12]];
+
+function Splash({ delay }) {
+  return (
+    <div aria-hidden="true" className="pointer-events-none absolute z-40" style={{ left: `${MOUTH.x * 100}%`, top: `${MOUTH.y * 100}%` }}>
+      {SPLASH.map(([x, y], i) => (
+        <motion.span
+          key={i}
+          className="absolute h-[6px] w-[6px] border border-[#1a2e05] bg-lime-400 shadow-[0_0_8px_#a3e635]"
+          initial={{ x: 0, y: 0, opacity: 0 }}
+          animate={{ x: [0, x, x * 1.2], y: [0, y, y + 30], opacity: [0, 1, 0] }}
+          transition={{ delay, duration: 0.6, ease: stepEase }}
+        />
+      ))}
+    </div>
+  );
+}
+
+const BREW_STEPS = [
+  { id: "gemma", label: "READING THE RUNES", detail: "Gemma 4 is fusing your ingredients" },
+  { id: "spotify", label: "SUMMONING TRACKS", detail: "Spotify is matching five songs to the mood" },
+];
+
+function BrewStatus({ phase }) {
+  const current = BREW_STEPS.findIndex((step) => step.id === phase);
+  return (
+    <ol className="mx-auto mt-4 w-fit space-y-3 text-left" aria-live="polite">
+      {BREW_STEPS.map((step, i) => {
+        const state = i < current ? "done" : i === current ? "active" : "waiting";
+        return (
+          <li key={step.id} className={`flex gap-3 ${state === "waiting" ? "opacity-40" : ""}`}>
+            <span className={`font-pixel mt-0.5 text-[10px] ${state === "done" ? "text-lime-300" : "text-orange-300"} ${state === "active" ? "blink" : ""}`}>
+              {state === "done" ? "+" : ">"}
+            </span>
+            <div>
+              <p className="font-pixel text-[9px] text-[#f5e9ff]">{step.label}{state === "done" ? " ✓" : "…"}</p>
+              <p className="font-vt text-lg text-purple-200/60">{step.detail}</p>
+            </div>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+function CauldronStage({ items, brewing, onRemove }) {
+  const mouthRef = useRef(null);
+  const potionEls = useRef(new Map());
+  const [drops, setDrops] = useState(null);
+
+  const registerRef = useCallback((id, el) => {
+    if (el) potionEls.current.set(id, el);
+    else potionEls.current.delete(id);
+  }, []);
+
+  // When brewing starts, measure how far each potion must travel to reach the cauldron.
+  useLayoutEffect(() => {
+    if (!brewing) {
+      setDrops(null);
+      return;
+    }
+    const mouth = mouthRef.current?.getBoundingClientRect();
+    if (!mouth) return;
+    const next = {};
+    potionEls.current.forEach((el, id) => {
+      const box = el.getBoundingClientRect();
+      next[id] = { x: mouth.left - (box.left + box.width / 2), y: mouth.top - (box.top + box.height / 2) };
+    });
+    setDrops(next);
+  }, [brewing]);
+
+  return (
+    <div className="relative mt-6 w-full">
+      {/* The ingredient ledge */}
+      <div className="relative mx-auto max-w-xl">
+        <div className="relative z-30 flex min-h-[88px] flex-wrap items-end justify-center gap-x-1 gap-y-3 px-3 pb-[2px]">
+          <AnimatePresence>
+            {items.map((item, index) => (
+              <MiniPotion
+                key={item.id}
+                item={item}
+                index={index}
+                drop={drops?.[item.id] ?? null}
+                onRemove={onRemove}
+                registerRef={registerRef}
+              />
+            ))}
+          </AnimatePresence>
+          {!items.length && (
+            <p className="font-vt self-center text-xl text-purple-200/45">Pick a potion above and add ingredients. They line up here.</p>
+          )}
+        </div>
+        <div aria-hidden="true" className="shelf-plank relative z-20 mx-6" />
+      </div>
+
+      {/* The witch and her cauldron */}
+      <div className="relative mx-auto -mt-2 w-full max-w-[520px]" style={{ aspectRatio: `${GIF.cropWidth} / ${GIF.height}` }}>
+        <motion.div
+          aria-hidden="true"
+          className="absolute h-1/3 w-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-lime-400 blur-3xl"
+          style={{ left: `${MOUTH.x * 100}%`, top: `${MOUTH.y * 100}%` }}
+          animate={{ opacity: brewing ? [0.2, 0.45, 0.2] : 0.12 }}
+          transition={brewing ? { duration: 1.2, repeat: Infinity } : { duration: 0.4 }}
+        />
+        <WitchGif />
+        <span ref={mouthRef} aria-hidden="true" className="absolute h-0 w-0" style={{ left: `${MOUTH.x * 100}%`, top: `${MOUTH.y * 100}%` }} />
+        {brewing && items.map((item, i) => <Splash key={item.id} delay={i * DROP_STAGGER + DROP_DURATION * 0.9} />)}
+      </div>
+    </div>
+  );
+}
+
+/* ----------------------------------------------------------------------------
+ * The lab page
+ * ------------------------------------------------------------------------- */
+
+function AlchemyLab({ items, mode, onModeChange, isDragging, error, brewing, phase, onAddText, onAddFiles, onAddSong, onRemove, onBrew }) {
+  const isFull = items.length >= MAX_ITEMS;
+  const counts = { song: 0, image: 0, text: 0 };
+  items.forEach((item) => {
+    counts[item.type] += 1;
+  });
+
+  return (
     <motion.section
       initial={{ opacity: 0, y: 16 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: 24, transition: { duration: 0.5 } }}
       className="w-full max-w-3xl"
     >
-      <header className="mb-12 text-center">
+      <header className="mb-8 text-center">
         <p className="font-pixel text-[8px] tracking-[0.3em] text-lime-300/80 sm:text-[10px]">✦ A HALLOWEEN MOOD-TO-MUSIC MACHINE ✦</p>
-        <h1 className="font-pixel mt-5 text-2xl leading-snug text-[#ffb347] [text-shadow:0_0_14px_#ff6a00,4px_4px_0_#3b0a52] sm:text-4xl">
+        <h1 className="font-pixel mt-4 text-2xl leading-snug text-[#ffb347] [text-shadow:0_0_14px_#ff6a00,4px_4px_0_#3b0a52] sm:text-4xl">
           THE VIBE <br className="sm:hidden" />ALCHEMIST
         </h1>
-        <p className="font-vt mx-auto mt-4 max-w-md text-xl leading-6 text-purple-100/75">
-          Drop eerie snapshots and stray thoughts onto the shelves. The witch will brew their mood into a playlist.
-        </p>
       </header>
 
-      <div
-        className={`relative border-[10px] border-[#3a2216] transition-shadow duration-200 ${
-          isDragging ? "shadow-[0_0_0_4px_#fb923c,0_0_48px_#fb923c99]" : "shadow-[8px_8px_0_#05030a]"
-        }`}
-      >
-        <div className="font-pixel absolute -top-[30px] left-1/2 z-20 -translate-x-1/2 whitespace-nowrap border-4 border-[#2a170c] bg-[#8a5a32] px-3 py-2 text-[8px] text-[#fde7c0] shadow-[3px_3px_0_#05030a] sm:text-[10px]">
-          THE POTION STASH
-        </div>
-        <div className="shelf-wall relative min-h-[272px] overflow-hidden px-1 sm:px-4">
-          <DustMotes />
-          <div className="relative z-10 grid auto-rows-[136px] grid-cols-3 sm:grid-cols-4">
-            <AnimatePresence>
-              {items.map((item, index) => (
-                <PotionBottle key={item.id} item={item} index={index} onRemove={onRemove} />
-              ))}
-            </AnimatePresence>
-          </div>
+      <CategoryShelf mode={mode} counts={counts} disabled={brewing} onSelect={onModeChange} />
 
-          {items.length === 0 && !isDragging && (
-            <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center p-4">
-              <div className="border-4 border-[#2a170c] bg-[#120b10]/85 px-5 py-4 text-center">
-                <p className="font-pixel text-[9px] leading-5 text-orange-200 sm:text-[10px]">DROP IMAGES, TEXT OR SONGS HERE</p>
-                <p className="font-vt mt-1 text-lg text-purple-200/60">Each ingredient becomes a potion on the shelf.</p>
-              </div>
-            </div>
-          )}
-
-          <AnimatePresence>
-            {isDragging && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center border-4 border-dashed border-orange-400 bg-[#1a0d05]/70"
-              >
-                <p className="font-pixel blink text-[10px] text-orange-200">RELEASE TO BOTTLE IT</p>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
-      </div>
-
-      <form onSubmit={submitDraft} className="mt-6 flex flex-col gap-3 sm:flex-row">
-        <label htmlFor="ingredient-text" className="sr-only">Add a text ingredient</label>
-        <input
-          id="ingredient-text"
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          maxLength={MAX_TEXT_LENGTH}
-          disabled={isFull}
-          placeholder="a lyric, a feeling, a strange little thought…"
-          className="font-vt min-w-0 flex-1 border-4 border-[#3b2a4a] bg-[#120b1a] px-3 py-2 text-xl text-[#f5e9ff] outline-none placeholder:text-purple-200/35 focus:border-lime-400 disabled:opacity-50"
+      <div className="relative mx-auto mt-8 max-w-xl">
+        <IngredientInput
+          mode={mode}
+          disabled={isFull || brewing}
+          onAddText={onAddText}
+          onAddFiles={onAddFiles}
+          onAddSong={onAddSong}
         />
-        <div className="flex gap-3">
-          <button
-            type="submit"
-            disabled={isFull || !draft.trim()}
-            className={`${CHUNKY_BUTTON} flex-1 bg-lime-400 px-4 py-3 text-[9px] text-[#0b1a02] hover:bg-lime-300`}
-          >
-            BOTTLE IT
-          </button>
-          <button
-            type="button"
-            disabled={isFull}
-            onClick={() => fileInput.current?.click()}
-            className={`${CHUNKY_BUTTON} flex-1 bg-[#6d28d9] px-4 py-3 text-[9px] text-white hover:bg-[#7c3aed]`}
-          >
-            + IMAGE
-          </button>
-        </div>
-        <input
-          ref={fileInput}
-          type="file"
-          accept="image/*"
-          multiple
-          hidden
-          onChange={(event) => {
-            onAddFiles([...event.target.files]);
-            event.target.value = "";
-          }}
-        />
-      </form>
-      <SongSearch disabled={isFull} onAddSong={onAddSong} />
-      <p className="font-vt mt-2 text-center text-lg text-purple-200/50">
-        {items.length}/{MAX_ITEMS} ingredients · drag, drop, or paste anywhere
-      </p>
-
-      {error && (
-        <p role="alert" className="font-vt mx-auto mt-4 max-w-xl border-2 border-red-400/60 bg-red-950/50 px-3 py-2 text-center text-xl text-red-200">
-          {error}
+        <p className="font-vt mt-2 text-center text-lg text-purple-200/50">
+          {items.length}/{MAX_ITEMS} ingredients · drag, drop, or paste anywhere
         </p>
-      )}
-
-      <div className="mt-8 flex justify-center">
-        <button
-          type="button"
-          onClick={onBrew}
-          disabled={!items.length}
-          className={`${CHUNKY_BUTTON} bg-[#ff7a1a] px-8 py-5 text-[11px] text-[#1a0a00] hover:bg-[#ff9a3d] enabled:shadow-[4px_4px_0_#05030a,0_0_32px_#ff7a1a66] sm:text-[13px]`}
-        >
-          ✦ BREW PLAYLIST ✦
-        </button>
-      </div>
-    </motion.section>
-  );
-}
-
-/* ----------------------------------------------------------------------------
- * The Witch's Cauldron (loading)
- * ------------------------------------------------------------------------- */
-
-const BREW_STEPS = [
-  { id: "gemma", label: "READING THE RUNES", detail: "Gemma 4 is fusing your images and words" },
-  { id: "spotify", label: "SUMMONING TRACKS", detail: "Spotify is matching five songs to the mood" },
-];
-
-const BUBBLES = [
-  { x: -70, size: 8, delay: 0, duration: 2.2, rise: 110 },
-  { x: -45, size: 12, delay: 0.4, duration: 2.6, rise: 150 },
-  { x: -20, size: 8, delay: 0.9, duration: 2.0, rise: 90 },
-  { x: 5, size: 16, delay: 0.2, duration: 2.8, rise: 170 },
-  { x: 30, size: 8, delay: 1.3, duration: 2.3, rise: 120 },
-  { x: 55, size: 12, delay: 0.7, duration: 2.5, rise: 140 },
-  { x: 75, size: 8, delay: 1.6, duration: 2.1, rise: 100 },
-  { x: -5, size: 10, delay: 1.1, duration: 2.4, rise: 160 },
-];
-
-// Quantized easing: bubbles hop up in chunky 8-bit steps instead of gliding.
-const stepEase = (t) => Math.round(t * 10) / 10;
-
-function CauldronScene({ phase }) {
-  const current = BREW_STEPS.findIndex((step) => step.id === phase);
-  return (
-    <motion.section
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0, transition: { duration: 0.4 } }}
-      transition={{ duration: 0.6 }}
-      className="flex w-full flex-col items-center text-center"
-      aria-live="polite"
-    >
-      <p className="font-pixel text-[8px] tracking-[0.3em] text-lime-300/80">✦ DOUBLE, DOUBLE, TOIL AND TROUBLE ✦</p>
-      <h2 className="font-pixel mt-4 text-lg text-[#ffb347] [text-shadow:0_0_12px_#ff6a00,3px_3px_0_#3b0a52] sm:text-2xl">
-        THE WITCH&apos;S CAULDRON
-      </h2>
-
-      <div className="relative mt-8 h-[300px] w-[300px]" aria-hidden="true">
-        <div className="absolute left-1/2 top-[120px] h-40 w-64 -translate-x-1/2 rounded-full bg-lime-400/20 blur-3xl" />
-
-        <motion.div
-          className="absolute z-10"
-          style={{ left: 72, top: 80 }}
-          animate={{ y: [0, -4, 0], rotate: [-2, 2, -2] }}
-          transition={{ duration: 1.6, repeat: Infinity, ease: "easeInOut" }}
-        >
-          <PixelSprite art={WITCH} palette={WITCH_PALETTE} scale={6} />
-        </motion.div>
-
-        <motion.div
-          className="absolute z-20 origin-bottom"
-          style={{ left: 176, top: 76, width: 8, height: 110 }}
-          animate={{ rotate: [-14, 14, -14] }}
-          transition={{ duration: 1.6, repeat: Infinity, ease: "easeInOut" }}
-        >
-          <div className="h-full w-full border-x-2 border-[#2a170c] bg-[#8a5a32]" />
-          <div className="absolute -left-[3px] top-[44px] h-[14px] w-[14px] border-2 border-[#0d0814] bg-[#65a30d]" />
-        </motion.div>
-
-        <div className="absolute z-30" style={{ left: 52, bottom: 34 }}>
-          <PixelSprite art={CAULDRON} palette={CAULDRON_PALETTE} scale={7} />
-        </div>
-
-        {BUBBLES.map((bubble, i) => (
-          <motion.span
-            key={i}
-            className="absolute z-40 border-2 border-[#1a2e05] bg-lime-400 shadow-[0_0_10px_#a3e635]"
-            style={{ left: 150 + bubble.x - bubble.size / 2, top: 170, width: bubble.size, height: bubble.size }}
-            initial={{ y: 0, opacity: 0 }}
-            animate={{ y: -bubble.rise, opacity: [0, 1, 1, 0] }}
-            transition={{ duration: bubble.duration, delay: bubble.delay, repeat: Infinity, ease: stepEase }}
-          />
-        ))}
-
-        <div className="absolute bottom-0 left-1/2 z-20 flex -translate-x-1/2 flex-col items-center">
-          <div className="flex gap-3">
-            {[0, 0.2, 0.4].map((delay) => (
-              <div key={delay} className="flicker" style={{ animationDelay: `${delay}s` }}>
-                <PixelSprite art={FLAME} palette={FLAME_PALETTE} scale={5} />
-              </div>
-            ))}
-          </div>
-          <div className="h-2 w-28 border-2 border-[#2a170c] bg-[#5a3420]" />
-        </div>
       </div>
 
-      <ol className="mt-8 space-y-3 text-left">
-        {BREW_STEPS.map((step, i) => {
-          const state = i < current ? "done" : i === current ? "active" : "waiting";
-          return (
-            <li key={step.id} className={`flex gap-3 ${state === "waiting" ? "opacity-40" : ""}`}>
-              <span
-                className={`font-pixel mt-0.5 text-[10px] ${state === "done" ? "text-lime-300" : "text-orange-300"} ${state === "active" ? "blink" : ""}`}
+      <CauldronStage items={items} brewing={brewing} onRemove={onRemove} />
+
+      {/* fixed height so the page doesn't jump when the brew button swaps for the status list */}
+      <div className="min-h-[150px]">
+        {brewing ? (
+          <BrewStatus phase={phase} />
+        ) : (
+          <>
+            {error && (
+              <p role="alert" className="font-vt mx-auto mt-4 max-w-xl border-2 border-red-400/60 bg-red-950/50 px-3 py-2 text-center text-xl text-red-200">
+                {error}
+              </p>
+            )}
+            <div className="mt-6 flex justify-center">
+              <button
+                type="button"
+                onClick={onBrew}
+                disabled={!items.length}
+                className={`${CHUNKY_BUTTON} bg-[#ff7a1a] px-8 py-5 text-[11px] text-[#1a0a00] hover:bg-[#ff9a3d] enabled:shadow-[4px_4px_0_#05030a,0_0_32px_#ff7a1a66] sm:text-[13px]`}
               >
-                {state === "done" ? "+" : ">"}
-              </span>
-              <div>
-                <p className="font-pixel text-[9px] text-[#f5e9ff]">{step.label}{state === "done" ? " ✓" : "…"}</p>
-                <p className="font-vt text-lg text-purple-200/60">{step.detail}</p>
-              </div>
-            </li>
-          );
-        })}
-      </ol>
+                ✦ BREW PLAYLIST ✦
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+
+      <AnimatePresence>
+        {isDragging && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="pointer-events-none fixed inset-4 z-50 flex items-center justify-center border-4 border-dashed border-orange-400 bg-[#1a0d05]/70"
+          >
+            <p className="font-pixel blink text-[10px] text-orange-200">RELEASE TO BOTTLE IT</p>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </motion.section>
   );
 }
@@ -1484,16 +1575,6 @@ function ScrollRod({ rolling = false }) {
       </div>
       <div className="absolute -left-2 -top-1 h-7 w-3 border-4 border-[#2a170c] bg-[#ff7a1a]" />
       <div className="absolute -right-2 -top-1 h-7 w-3 border-4 border-[#2a170c] bg-[#ff7a1a]" />
-    </div>
-  );
-}
-
-function PixelRule() {
-  return (
-    <div aria-hidden="true" className="my-6 flex justify-center gap-1">
-      {Array.from({ length: 15 }, (_, i) => (
-        <span key={i} className={`h-1.5 w-1.5 ${i % 2 ? "bg-[#9a4a1c]/35" : "bg-[#9a4a1c]"}`} />
-      ))}
     </div>
   );
 }
@@ -1565,96 +1646,97 @@ function SkeletonScroll({ reading, tracks, playlist, onSavePlaylist, onBack, onS
                 {reading.playlist_title}
               </h2>
 
-              <PixelRule />
+              <section className="mt-6 border-4 border-[#3b2414] bg-[#f6e3b4]/70 px-4 py-5 shadow-[4px_4px_0_#9a4a1c55] sm:px-6">
+                <ScrollHeading>YOUR PLAYLIST</ScrollHeading>
+                <ol>
+                  {tracks.map((track, i) => (
+                    <li key={track.id}>
+                      <a
+                        href={track.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="group flex items-center gap-3 border-b-2 border-dashed border-[#3b2414]/25 px-1 py-2 transition hover:bg-[#3b2414]/10"
+                      >
+                        <span className="font-pixel text-[9px] text-[#c2410c]">{String(i + 1).padStart(2, "0")}</span>
+                        <span className="min-w-0 flex-1">
+                          <span className="font-vt block truncate text-2xl leading-6">{track.name}</span>
+                          <span className="font-vt block truncate text-lg leading-5 text-[#7a4a2a]">{track.artist}</span>
+                        </span>
+                        <span className="font-pixel text-[9px] text-[#3b2414]/40 group-hover:text-[#15803d]">&gt;</span>
+                      </a>
+                    </li>
+                  ))}
+                </ol>
 
-              <ScrollHeading>THE FUSION BREAKDOWN</ScrollHeading>
-              <dl className="space-y-3">
-                {FUSION_ROWS.map(([key, label], i) => (
-                  <div key={key} className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:gap-4">
-                    <dt className="font-pixel w-36 shrink-0 text-[8px] text-[#9a4a1c]">{i ? "+ " : ""}{label}</dt>
-                    <dd className="font-vt text-2xl leading-6">{fusion[key]}</dd>
-                  </div>
-                ))}
-                <div className="border-4 border-[#3b2414] bg-[#2a1a10] px-3 py-3 shadow-[4px_4px_0_#9a4a1c55]">
-                  <dt className="font-pixel text-[8px] text-lime-300">= THE FUSION</dt>
-                  <dd className="font-vt mt-1 text-2xl leading-6 text-[#ffcf7a]">{fusion.the_fusion}</dd>
-                </div>
-              </dl>
-
-              <div className="mt-7 grid gap-5 sm:grid-cols-2">
-                <div>
-                  <ScrollHeading>GENRE SEEDS</ScrollHeading>
-                  <div className="flex flex-wrap gap-2">
-                    {genres.map((genre) => (
-                      <span key={genre} className="font-pixel border-2 border-[#3b2414] bg-[#f6e3b4] px-2 py-1 text-[8px]">
-                        {genre}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <PixelMeter label="VALENCE" value={features.target_valence} display={features.target_valence.toFixed(2)} />
-                  <PixelMeter label="ENERGY" value={features.target_energy} display={features.target_energy.toFixed(2)} />
-                  <PixelMeter label="TEMPO" value={(features.target_tempo - 60) / 120} display={`${features.target_tempo} BPM`} />
-                </div>
-              </div>
-
-              <PixelRule />
-
-              <ScrollHeading>FIVE TRACKS FROM BEYOND</ScrollHeading>
-              <ol>
-                {tracks.map((track, i) => (
-                  <li key={track.id}>
+                <div className="mt-8 flex flex-wrap items-center justify-center gap-4">
+                  {playlist.status === "done" ? (
                     <a
-                      href={track.url}
+                      href={playlist.url}
                       target="_blank"
                       rel="noreferrer"
-                      className="group flex items-center gap-3 border-b-2 border-dashed border-[#3b2414]/25 px-1 py-2 transition hover:bg-[#3b2414]/10"
+                      className="font-pixel border-4 border-[#0b0610] border-b-[8px] bg-[#ffcf7a] px-6 py-4 text-[10px] text-[#2a1a10] shadow-[4px_4px_0_#3b2414] transition hover:bg-[#ffe0a3] active:translate-y-[2px] active:border-b-4"
                     >
-                      <span className="font-pixel text-[9px] text-[#c2410c]">{String(i + 1).padStart(2, "0")}</span>
-                      <span className="min-w-0 flex-1">
-                        <span className="font-vt block truncate text-2xl leading-6">{track.name}</span>
-                        <span className="font-vt block truncate text-lg leading-5 text-[#7a4a2a]">{track.artist}</span>
-                      </span>
-                      <span className="font-pixel text-[9px] text-[#3b2414]/40 group-hover:text-[#15803d]">&gt;</span>
+                      ✦ OPEN YOUR PLAYLIST
                     </a>
-                  </li>
-                ))}
-              </ol>
-
-              <div className="mt-8 flex flex-wrap items-center justify-center gap-4">
-                {playlist.status === "done" ? (
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={onSavePlaylist}
+                      disabled={!canSave || playlist.status === "saving"}
+                      title={canSave ? "Save these tracks as a private playlist on your Spotify" : "Turn off Spotify demo mode to save playlists"}
+                      className="font-pixel border-4 border-[#0b0610] border-b-[8px] bg-[#ffcf7a] px-6 py-4 text-[10px] text-[#2a1a10] shadow-[4px_4px_0_#3b2414] transition hover:bg-[#ffe0a3] active:translate-y-[2px] active:border-b-4 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {playlist.status === "saving" ? "SAVING..." : "+ SAVE AS PLAYLIST"}
+                    </button>
+                  )}
                   <a
-                    href={playlist.url}
+                    href={listenUrl}
                     target="_blank"
                     rel="noreferrer"
-                    className="font-pixel border-4 border-[#0b0610] border-b-[8px] bg-[#ffcf7a] px-6 py-4 text-[10px] text-[#2a1a10] shadow-[4px_4px_0_#3b2414] transition hover:bg-[#ffe0a3] active:translate-y-[2px] active:border-b-4"
+                    className="font-pixel border-4 border-[#0b0610] border-b-[8px] bg-[#1ed760] px-6 py-4 text-[10px] text-[#04140a] shadow-[4px_4px_0_#3b2414] transition hover:bg-[#3be477] active:translate-y-[2px] active:border-b-4"
                   >
-                    ✦ OPEN YOUR PLAYLIST
+                    &gt; LISTEN ON SPOTIFY
                   </a>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={onSavePlaylist}
-                    disabled={!canSave || playlist.status === "saving"}
-                    title={canSave ? "Save these tracks as a private playlist on your Spotify" : "Turn off Spotify demo mode to save playlists"}
-                    className="font-pixel border-4 border-[#0b0610] border-b-[8px] bg-[#ffcf7a] px-6 py-4 text-[10px] text-[#2a1a10] shadow-[4px_4px_0_#3b2414] transition hover:bg-[#ffe0a3] active:translate-y-[2px] active:border-b-4 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {playlist.status === "saving" ? "SAVING..." : "+ SAVE AS PLAYLIST"}
-                  </button>
+                </div>
+                {playlist.status === "error" && (
+                  <p className="font-vt mt-4 text-center text-xl leading-6 text-[#b91c1c]">{playlist.error}</p>
                 )}
-                <a
-                  href={listenUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="font-pixel border-4 border-[#0b0610] border-b-[8px] bg-[#1ed760] px-6 py-4 text-[10px] text-[#04140a] shadow-[4px_4px_0_#3b2414] transition hover:bg-[#3be477] active:translate-y-[2px] active:border-b-4"
-                >
-                  &gt; LISTEN ON SPOTIFY
-                </a>
-              </div>
-              {playlist.status === "error" && (
-                <p className="font-vt mt-4 text-center text-xl leading-6 text-[#b91c1c]">{playlist.error}</p>
-              )}
+              </section>
+
+              <section className="mt-6 border-4 border-[#3b2414] bg-[#f6e3b4]/70 px-4 py-5 shadow-[4px_4px_0_#9a4a1c55] sm:px-6">
+                <ScrollHeading>THE FUSION BREAKDOWN</ScrollHeading>
+                <dl className="space-y-3">
+                  {FUSION_ROWS.map(([key, label], i) => (
+                    <div key={key} className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:gap-4">
+                      <dt className="font-pixel w-36 shrink-0 text-[8px] text-[#9a4a1c]">{i ? "+ " : ""}{label}</dt>
+                      <dd className="font-vt text-2xl leading-6">{fusion[key]}</dd>
+                    </div>
+                  ))}
+                  <div className="border-4 border-[#3b2414] bg-[#2a1a10] px-3 py-3 shadow-[4px_4px_0_#9a4a1c55]">
+                    <dt className="font-pixel text-[8px] text-lime-300">= THE FUSION</dt>
+                    <dd className="font-vt mt-1 text-2xl leading-6 text-[#ffcf7a]">{fusion.the_fusion}</dd>
+                  </div>
+                </dl>
+
+                <div className="mt-7 grid gap-5 sm:grid-cols-2">
+                  <div>
+                    <ScrollHeading>GENRE SEEDS</ScrollHeading>
+                    <div className="flex flex-wrap gap-2">
+                      {genres.map((genre) => (
+                        <span key={genre} className="font-pixel border-2 border-[#3b2414] bg-[#f6e3b4] px-2 py-1 text-[8px]">
+                          {genre}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <PixelMeter label="VALENCE" value={features.target_valence} display={features.target_valence.toFixed(2)} />
+                    <PixelMeter label="ENERGY" value={features.target_energy} display={features.target_energy.toFixed(2)} />
+                    <PixelMeter label="TEMPO" value={(features.target_tempo - 60) / 120} display={`${features.target_tempo} BPM`} />
+                  </div>
+                </div>
+
+              </section>
             </article>
           </motion.div>
           <ScrollRod rolling />
@@ -1708,6 +1790,7 @@ export default function App() {
   const [items, setItems] = useState([]);
   const [error, setError] = useState("");
   const [isDragging, setIsDragging] = useState(false);
+  const [mode, setMode] = useState("song"); // which category potion is selected
   const [phase, setPhase] = useState("gemma");
   const [result, setResult] = useState(null);
   const [playlist, setPlaylist] = useState({ status: "idle" });
@@ -1837,7 +1920,7 @@ export default function App() {
           const tracks = await summonTracks(reading);
           return { reading, tracks };
         })(),
-        wait(MIN_BREW_MS),
+        wait(Math.max(MIN_BREW_MS, items.length * DROP_STAGGER * 1000 + 1800)), // let every potion land
       ]);
       setResult(brewed);
       setPlaylist({ status: "idle" });
@@ -1888,12 +1971,16 @@ export default function App() {
 
         <div className="relative z-10 mx-auto flex min-h-screen w-full max-w-4xl flex-col items-center justify-center px-4 py-16">
           <AnimatePresence mode="wait">
-            {stage === "stash" && (
-              <PotionStash
-                key="stash"
+            {stage !== "results" && (
+              <AlchemyLab
+                key="lab"
                 items={items}
+                mode={mode}
+                onModeChange={setMode}
                 isDragging={isDragging}
                 error={error}
+                brewing={stage === "brewing"}
+                phase={phase}
                 onAddText={addText}
                 onAddFiles={addFiles}
                 onAddSong={addSong}
@@ -1901,7 +1988,6 @@ export default function App() {
                 onBrew={brew}
               />
             )}
-            {stage === "brewing" && <CauldronScene key="brewing" phase={phase} />}
             {stage === "results" && result && (
               <SkeletonScroll
                 key="results"
