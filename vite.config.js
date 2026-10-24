@@ -39,5 +39,12 @@ function spotifyToken(env) {
 export default defineConfig(({ mode }) => {
   // '' prefix loads non-VITE_ vars too; they stay on the server.
   const env = loadEnv(mode, process.cwd(), '')
-  return { plugins: [react(), spotifyToken(env)] }
+  return {
+    plugins: [react(), spotifyToken(env)],
+    // The client id is public (the PKCE login needs it in the browser); the secret stays server-side.
+    define: { 'import.meta.env.VITE_SPOTIFY_CLIENT_ID': JSON.stringify(env.SPOTIFY_CLIENT_ID ?? '') },
+    // Spotify rejects "localhost" redirect URIs, so serve and open the app on 127.0.0.1.
+    server: { host: '127.0.0.1', port: 5173, strictPort: true },
+    preview: { host: '127.0.0.1', port: 5173, strictPort: true },
+  }
 })

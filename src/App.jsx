@@ -31,6 +31,8 @@ const CONFIG = {
   // Confirm the exact Gemma 4 id (size + "-it" suffix) in Google AI Studio.
   gemmaModel: ENV.VITE_GEMMA_MODEL || "gemma-4-31b-it",
   spotifyTokenEndpoint: ENV.VITE_SPOTIFY_TOKEN_ENDPOINT || "/api/spotify-token",
+  // Injected from SPOTIFY_CLIENT_ID by vite.config.js (a client id is public; the secret never is).
+  spotifyClientId: ENV.VITE_SPOTIFY_CLIENT_ID,
 };
 
 const MAX_ITEMS = 12;
@@ -231,7 +233,129 @@ function normalizeTrack(track) {
     name: track.name,
     artist,
     url: track.external_urls?.spotify ?? spotifySearchUrl(`${track.name} ${artist}`),
+    uri: track.uri ?? null, // spotify:track:... (absent on mock tracks)
   };
+}
+
+/* ----------------------------------------------------------------------------
+ * Save as playlist: Spotify login (Authorization Code + PKCE, no secret needed)
+ * ------------------------------------------------------------------------- */
+
+const PLAYLIST_SCOPES = "playlist-modify-private playlist-modify-public";
+const AUTH_KEYS = { verifier: "va:pkce-verifier", token: "va:spotify-user-token", pending: "va:pending-brew" };
+const spotifyRedirectUri = () => `${window.location.origin}/callback`;
+
+const session = {
+  get(key) {
+    try {
+      return JSON.parse(window.sessionStorage.getItem(key));
+    } catch {
+      return null;
+    }
+  },
+  set(key, value) {
+    try {
+      window.sessionStorage.setItem(key, JSON.stringify(value));
+    } catch {
+      /* storage blocked: login still works, the brew just won't survive the redirect */
+    }
+  },
+  remove(key) {
+    try {
+      window.sessionStorage.removeItem(key);
+    } catch {
+      /* ignore */
+    }
+  },
+};
+
+const base64Url = (bytes) =>
+  btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
+function getUserToken() {
+  const saved = session.get(AUTH_KEYS.token);
+  return saved && saved.expiresAt > Date.now() + 60_000 ? saved.accessToken : null;
+}
+
+// Leaves the page; the brew is stashed so it can be restored when Spotify sends the user back.
+async function beginSpotifyLogin(brew) {
+  if (!CONFIG.spotifyClientId) throw new Error("Set SPOTIFY_CLIENT_ID in .env.local to save playlists.");
+  const verifier = base64Url(crypto.getRandomValues(new Uint8Array(48)));
+  const challenge = base64Url(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)));
+  session.set(AUTH_KEYS.verifier, verifier);
+  session.set(AUTH_KEYS.pending, brew);
+  const params = new URLSearchParams({
+    client_id: CONFIG.spotifyClientId,
+    response_type: "code",
+    redirect_uri: spotifyRedirectUri(),
+    scope: PLAYLIST_SCOPES,
+    code_challenge_method: "S256",
+    code_challenge: challenge,
+  });
+  window.location.assign(`https://accounts.spotify.com/authorize?${params}`);
+}
+
+// Runs once on load. Returns the stashed brew if we just came back from Spotify's login page.
+async function completeSpotifyLogin() {
+  if (window.location.pathname !== "/callback") return null;
+  const query = new URLSearchParams(window.location.search);
+  window.history.replaceState(null, "", "/");
+  const brew = session.get(AUTH_KEYS.pending);
+  const verifier = session.get(AUTH_KEYS.verifier);
+  session.remove(AUTH_KEYS.pending);
+  session.remove(AUTH_KEYS.verifier);
+  if (query.get("error")) return brew ? { brew, error: "Spotify login was cancelled." } : null;
+  if (!query.get("code") || !verifier) return brew ? { brew, error: "Spotify login expired. Try saving again." } : null;
+
+  const response = await fetch("https://accounts.spotify.com/api/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: CONFIG.spotifyClientId,
+      grant_type: "authorization_code",
+      code: query.get("code"),
+      redirect_uri: spotifyRedirectUri(),
+      code_verifier: verifier,
+    }),
+  });
+  if (!response.ok) {
+    console.error("[Vibe Alchemist] Spotify login error", response.status, await response.text().catch(() => ""));
+    return brew ? { brew, error: "Spotify login failed. Try saving again." } : null;
+  }
+  const data = await response.json();
+  session.set(AUTH_KEYS.token, { accessToken: data.access_token, expiresAt: Date.now() + data.expires_in * 1000 });
+  return brew ? { brew, error: null } : null;
+}
+
+async function spotifyUserFetch(path, token, body) {
+  const response = await fetch(`https://api.spotify.com/v1${path}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    console.error("[Vibe Alchemist] Spotify playlist error", response.status, detail);
+    if (response.status === 401) session.remove(AUTH_KEYS.token);
+    throw new Error(
+      response.status === 403
+        ? "Spotify said no. Add your account under User Management in the Spotify dashboard."
+        : "Spotify couldn't save the playlist. Try again.",
+    );
+  }
+  return response.json();
+}
+
+async function createPlaylist(token, reading, tracks) {
+  const uris = tracks.map((track) => track.uri).filter(Boolean);
+  if (!uris.length) throw new Error("These tracks aren't real Spotify tracks (demo mode).");
+  const playlist = await spotifyUserFetch("/me/playlists", token, {
+    name: reading.playlist_title,
+    description: `${reading.fusion_breakdown.the_fusion}. Brewed by The Vibe Alchemist.`,
+    public: false,
+  });
+  await spotifyUserFetch(`/playlists/${playlist.id}/items`, token, { uris });
+  return playlist.external_urls?.spotify ?? `https://open.spotify.com/playlist/${playlist.id}`;
 }
 
 async function searchTracks(query, token, offset = 0) {
@@ -1253,7 +1377,8 @@ const FUSION_ROWS = [
   ["music_mood", "MUSIC MOOD"],
 ];
 
-function SkeletonScroll({ reading, tracks, onBack, onStartOver }) {
+function SkeletonScroll({ reading, tracks, playlist, onSavePlaylist, onBack, onStartOver }) {
+  const canSave = tracks.some((track) => track.uri);
   const { fusion_breakdown: fusion, seed_genres: genres, target_audio_features: features } = reading;
   const listenUrl = tracks[0]?.url ?? spotifySearchUrl(genres.join(" "));
   return (
@@ -1349,7 +1474,27 @@ function SkeletonScroll({ reading, tracks, onBack, onStartOver }) {
                 ))}
               </ol>
 
-              <div className="mt-8 flex justify-center">
+              <div className="mt-8 flex flex-wrap items-center justify-center gap-4">
+                {playlist.status === "done" ? (
+                  <a
+                    href={playlist.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-pixel border-4 border-[#0b0610] border-b-[8px] bg-[#ffcf7a] px-6 py-4 text-[10px] text-[#2a1a10] shadow-[4px_4px_0_#3b2414] transition hover:bg-[#ffe0a3] active:translate-y-[2px] active:border-b-4"
+                  >
+                    ✦ OPEN YOUR PLAYLIST
+                  </a>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={onSavePlaylist}
+                    disabled={!canSave || playlist.status === "saving"}
+                    title={canSave ? "Save these tracks as a private playlist on your Spotify" : "Turn off Spotify demo mode to save playlists"}
+                    className="font-pixel border-4 border-[#0b0610] border-b-[8px] bg-[#ffcf7a] px-6 py-4 text-[10px] text-[#2a1a10] shadow-[4px_4px_0_#3b2414] transition hover:bg-[#ffe0a3] active:translate-y-[2px] active:border-b-4 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {playlist.status === "saving" ? "SAVING..." : "+ SAVE AS PLAYLIST"}
+                  </button>
+                )}
                 <a
                   href={listenUrl}
                   target="_blank"
@@ -1359,6 +1504,9 @@ function SkeletonScroll({ reading, tracks, onBack, onStartOver }) {
                   &gt; LISTEN ON SPOTIFY
                 </a>
               </div>
+              {playlist.status === "error" && (
+                <p className="font-vt mt-4 text-center text-xl leading-6 text-[#b91c1c]">{playlist.error}</p>
+              )}
             </article>
           </motion.div>
           <ScrollRod rolling />
@@ -1414,7 +1562,39 @@ export default function App() {
   const [isDragging, setIsDragging] = useState(false);
   const [phase, setPhase] = useState("gemma");
   const [result, setResult] = useState(null);
+  const [playlist, setPlaylist] = useState({ status: "idle" });
   const dragDepth = useRef(0);
+
+  const saveToSpotify = useCallback(async (brew) => {
+    setPlaylist({ status: "saving" });
+    try {
+      const token = getUserToken();
+      if (!token) {
+        await beginSpotifyLogin(brew); // navigates away; we resume in the effect below
+        return;
+      }
+      const url = await createPlaylist(token, brew.reading, brew.tracks);
+      setPlaylist({ status: "done", url });
+    } catch (err) {
+      setPlaylist({ status: "error", error: err.message });
+    }
+  }, []);
+
+  // Back from Spotify's login page: restore the brew and finish saving it.
+  const loginHandled = useRef(false);
+  useEffect(() => {
+    if (loginHandled.current) return;
+    loginHandled.current = true;
+    completeSpotifyLogin()
+      .then((returned) => {
+        if (!returned) return;
+        setResult(returned.brew);
+        setStage("results");
+        if (returned.error) setPlaylist({ status: "error", error: returned.error });
+        else saveToSpotify(returned.brew);
+      })
+      .catch((err) => setPlaylist({ status: "error", error: err.message }));
+  }, [saveToSpotify]);
   const itemsRef = useRef(items);
 
   useEffect(() => {
@@ -1499,6 +1679,7 @@ export default function App() {
         wait(MIN_BREW_MS),
       ]);
       setResult(brewed);
+      setPlaylist({ status: "idle" });
       setStage("results");
     } catch (cause) {
       console.error("[Vibe Alchemist] brew failed", cause);
@@ -1564,6 +1745,8 @@ export default function App() {
                 key="results"
                 reading={result.reading}
                 tracks={result.tracks}
+                playlist={playlist}
+                onSavePlaylist={() => saveToSpotify(result)}
                 onBack={backToStash}
                 onStartOver={startOver}
               />
