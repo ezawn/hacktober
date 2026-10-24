@@ -59,7 +59,7 @@ Your JSON output must contain the following keys:
 
 "target_audio_features": An object containing float values (0.0 to 1.0) for: "target_valence", "target_energy", and "target_tempo" (BPM).
 
-"song_suggestions": An array of 8 real, well-known, released songs that match the_fusion, each an object {"title": "...", "artist": "..."}. Only suggest songs you are confident exist on Spotify, with the exact title and primary artist. Vary the artists.`;
+"song_suggestions": An array of 8 real, well-known, released songs that match the_fusion, each an object {"title": "...", "artist": "..."}. Only suggest songs you are confident exist on Spotify, with the exact title and primary artist. Music tracks only: no podcasts, episodes, audiobooks, documentaries, interviews, skits or spoken word. Vary the artists.`;
 
 /* ----------------------------------------------------------------------------
  * AI + Spotify pipeline
@@ -241,7 +241,20 @@ async function searchTracks(query, token, offset = 0) {
     throw new Error("Spotify couldn't conjure any tracks. Try brewing again.");
   }
   const data = await response.json();
-  return data.tracks?.items ?? [];
+  return (data.tracks?.items ?? []).filter(isSong);
+}
+
+// Spotify's track search also surfaces audiobook chapters, podcast/documentary audio,
+// interviews and sound effects. Keep real songs only.
+const NON_SONG = /\b(episode|ep\.?\s*\d|chapter|kapitel|chapitre|cap[ií]tulo|part\s*\d+\s*of|documentary|podcast|interview|audiobook|audio\s*book|commentary|narrat(ed|ion|or)|lecture|sermon|meditation\s*guide|sleep\s*story|white\s*noise|sound\s*effects?|asmr|skit|intro\s*speech)\b/i;
+
+function isSong(track) {
+  if (!track || track.type !== "track" || track.is_local) return false;
+  const duration = track.duration_ms ?? 0;
+  if (duration < 60_000 || duration > 12 * 60_000) return false; // skips, interludes and long-form spoken audio
+  const album = track.album ?? {};
+  const text = [track.name, album.name, ...(track.artists ?? []).map((a) => a.name)].join(" ");
+  return !NON_SONG.test(text);
 }
 
 // Take tracks round-robin across genres so one genre doesn't swamp the playlist.
@@ -297,7 +310,11 @@ async function summonTracks(reading) {
   if (tracks.length < 5) {
     // Top genre-tagged results (offset 0 = most relevant) fill any gaps.
     const byGenre = await Promise.all(
-      reading.seed_genres.map((genre) => searchTracks(`genre:"${genre}"`, token).catch(() => [])),
+      reading.seed_genres.map(async (genre) => {
+        // Two pages, since filtering out non-songs can thin a page of 10.
+        const pages = await Promise.all([0, 10].map((offset) => searchTracks(`genre:"${genre}"`, token, offset).catch(() => [])));
+        return pages.flat();
+      }),
     );
     tracks = interleave([tracks, ...byGenre], 5);
   }
