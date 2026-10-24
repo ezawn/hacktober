@@ -4,13 +4,15 @@ import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 /* ============================================================================
  * THE VIBE ALCHEMIST
  * Drop images + text into the Potion Stash -> Gemma 4 (via the Gemini API)
- * fuses them into one mood -> Spotify Recommendations turns it into 5 songs.
+ * fuses them into one mood -> Spotify Search turns its genres into 5 songs.
  *
- * Runs fully simulated by default. To hit the real APIs, set (Vite):
+ * Runs fully simulated by default. To hit the real APIs, put in .env.local:
  *   VITE_USE_MOCKS=false
  *   VITE_GEMINI_API_KEY=<Google AI Studio key>
- *   VITE_GEMMA_MODEL=<Gemma 4 model id from AI Studio's model list>
- *   VITE_SPOTIFY_TOKEN_ENDPOINT=<your server route returning { access_token }>
+ *   VITE_GEMMA_MODEL=<Gemma 4 model id, default gemma-4-31b-it>
+ *   SPOTIFY_CLIENT_ID=<Spotify app client id>        (server-side only, see vite.config.js)
+ *   SPOTIFY_CLIENT_SECRET=<Spotify app client secret> (server-side only)
+ * Optional: VITE_MOCK_GEMMA / VITE_MOCK_SPOTIFY override VITE_USE_MOCKS per API.
  *
  * Heads-up: VITE_* values ship to the browser. Fine for a hackathon demo; for
  * a public deploy, move callGemma() behind a server route like the Spotify one.
@@ -18,8 +20,13 @@ import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 
 const ENV = import.meta.env ?? {};
 
+const useMocks = ENV.VITE_USE_MOCKS !== "false";
+const mockFlag = (value) => (value === undefined ? useMocks : value !== "false");
+
 const CONFIG = {
-  useMocks: ENV.VITE_USE_MOCKS !== "false",
+  useMocks,
+  mockGemma: mockFlag(ENV.VITE_MOCK_GEMMA),
+  mockSpotify: mockFlag(ENV.VITE_MOCK_SPOTIFY),
   geminiApiKey: ENV.VITE_GEMINI_API_KEY,
   // Confirm the exact Gemma 4 id (size + "-it" suffix) in Google AI Studio.
   gemmaModel: ENV.VITE_GEMMA_MODEL || "gemma-4-31b-it",
@@ -166,7 +173,7 @@ function normalizeReading(data) {
 
 async function analyzeVibes(items) {
   const body = await buildGemmaRequest(items);
-  if (CONFIG.useMocks) {
+  if (CONFIG.mockGemma) {
     console.info("[Vibe Alchemist] mock mode: Gemma request that would be sent", redactImages(body));
     await wait(1900);
     return parseGemmaJson(JSON.stringify(pickMockBrew(items).reading));
@@ -174,16 +181,11 @@ async function analyzeVibes(items) {
   return parseGemmaJson(await callGemma(body));
 }
 
-function buildRecommendationsUrl(reading) {
-  const { target_valence, target_energy, target_tempo } = reading.target_audio_features;
-  const params = new URLSearchParams({
-    limit: "5",
-    seed_genres: reading.seed_genres.join(","),
-    target_valence: target_valence.toFixed(2),
-    target_energy: target_energy.toFixed(2),
-    target_tempo: String(target_tempo),
-  });
-  return `https://api.spotify.com/v1/recommendations?${params}`;
+// /v1/recommendations is closed to new Spotify apps, so we search each genre instead.
+// Development Mode caps Search at limit=10; a random offset keeps brews varied.
+function buildSearchUrl(query, offset = 0) {
+  const params = new URLSearchParams({ q: query, type: "track", limit: "10", offset: String(offset) });
+  return `https://api.spotify.com/v1/search?${params}`;
 }
 
 // Client Credentials needs the client secret, so tokens must be minted server-side:
@@ -209,29 +211,48 @@ function normalizeTrack(track) {
   };
 }
 
+async function searchTracks(query, token, offset = 0) {
+  const response = await fetch(buildSearchUrl(query, offset), { headers: { Authorization: `Bearer ${token}` } });
+  if (!response.ok) {
+    console.error("[Vibe Alchemist] Spotify API error", response.status, await response.text().catch(() => ""));
+    throw new Error("Spotify couldn't conjure any tracks. Try brewing again.");
+  }
+  const data = await response.json();
+  return data.tracks?.items ?? [];
+}
+
+// Take tracks round-robin across genres so one genre doesn't swamp the playlist.
+function interleave(lists, count) {
+  const picked = [];
+  const seen = new Set();
+  for (let i = 0; picked.length < count && lists.some((list) => i < list.length); i += 1) {
+    for (const list of lists) {
+      const track = list[i];
+      if (track && !seen.has(track.id) && picked.length < count) {
+        seen.add(track.id);
+        picked.push(track);
+      }
+    }
+  }
+  return picked;
+}
+
 async function summonTracks(reading) {
-  const url = buildRecommendationsUrl(reading);
-  if (CONFIG.useMocks) {
-    console.info("[Vibe Alchemist] mock mode: Spotify request that would be sent", url);
+  if (CONFIG.mockSpotify) {
+    console.info("[Vibe Alchemist] mock mode: Spotify searches that would be sent", reading.seed_genres);
     await wait(1100);
     return mockSpotifyResponse(reading).tracks.map(normalizeTrack);
   }
-  // Note: Spotify restricted /v1/recommendations for apps created after Nov 27, 2024.
-  // A newer app will get 404/403 here unless it has been granted extended access.
   const token = await getSpotifyToken();
-  const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-  if (!response.ok) {
-    console.error("[Vibe Alchemist] Spotify API error", response.status, await response.text().catch(() => ""));
-    throw new Error(
-      response.status === 403 || response.status === 404
-        ? "Spotify refused the recommendations request (it's restricted for newer apps)."
-        : "Spotify couldn't conjure any tracks. Try brewing again.",
-    );
+  const byGenre = await Promise.all(reading.seed_genres.map((genre) => searchTracks(`genre:"${genre}"`, token, Math.floor(Math.random() * 20))));
+  let tracks = interleave(byGenre, 5);
+  if (tracks.length < 5) {
+    // Gemma sometimes invents genre names Spotify doesn't tag; fall back to the mood words.
+    const extra = await searchTracks(reading.fusion_breakdown.the_fusion, token);
+    tracks = interleave([tracks, extra], 5);
   }
-  const data = await response.json();
-  const tracks = (data.tracks ?? []).slice(0, 5).map(normalizeTrack);
   if (!tracks.length) throw new Error("No tracks matched this mood. Try different ingredients.");
-  return tracks;
+  return tracks.map(normalizeTrack);
 }
 
 function redactImages(body) {
@@ -316,7 +337,7 @@ function pickMockBrew(items) {
   return MOCK_BREWS[seed % MOCK_BREWS.length];
 }
 
-// Shaped like the real /v1/recommendations payload so normalizeTrack() is exercised too.
+// A flat track list, same track shape as Spotify Search results so normalizeTrack() is exercised too.
 function mockSpotifyResponse(reading) {
   const brew = MOCK_BREWS.find((entry) => entry.reading.playlist_title === reading.playlist_title) ?? MOCK_BREWS[0];
   return {
@@ -1483,9 +1504,9 @@ export default function App() {
           </AnimatePresence>
         </div>
 
-        {CONFIG.useMocks && (
+        {(CONFIG.mockGemma || CONFIG.mockSpotify) && (
           <p className="font-pixel pointer-events-none absolute bottom-4 left-1/2 z-10 -translate-x-1/2 whitespace-nowrap text-[6px] tracking-[0.2em] text-lime-300/50">
-            DEMO MODE · SIMULATED GEMMA + SPOTIFY
+            DEMO MODE · SIMULATED {[CONFIG.mockGemma && "GEMMA", CONFIG.mockSpotify && "SPOTIFY"].filter(Boolean).join(" + ")}
           </p>
         )}
       </main>
