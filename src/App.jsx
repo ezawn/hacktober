@@ -37,7 +37,7 @@ const CONFIG = {
 
 const MAX_ITEMS = 12;
 const MAX_TEXT_LENGTH = 400;
-const MIN_BREW_MS = 3200; // keep the cauldron on screen long enough to enjoy
+const MIN_BREW_MS = 1200; // just long enough to see the cauldron bubble
 
 const SYSTEM_PROMPT = `You are Gemma 4, an analytical music curator engine. Your job is to take a mix of user inputs (images and text snippets) and "fuse" them into a single musical mood.
 
@@ -70,7 +70,8 @@ Your JSON output must contain the following keys:
 const wait = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
 // Downscale before upload: phone photos are huge and the mood survives 1024px.
-async function fileToInlinePart(file, maxSide = 1024) {
+// 640px is plenty for mood, and far fewer image tokens for Gemma to read than 1024px.
+async function fileToInlinePart(file, maxSide = 640) {
   const bitmap = await createImageBitmap(file);
   const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
   const canvas = document.createElement("canvas");
@@ -81,7 +82,7 @@ async function fileToInlinePart(file, maxSide = 1024) {
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
   bitmap.close?.();
-  const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+  const dataUrl = canvas.toDataURL("image/jpeg", 0.8);
   return { inline_data: { mime_type: "image/jpeg", data: dataUrl.split(",")[1] } };
 }
 
@@ -112,7 +113,25 @@ async function buildGemmaRequest(items) {
 
 const GEMMA_FALLBACKS = ["gemma-4-31b-it", "gemma-4-26b-a4b-it"];
 
+// Gemma 4 "thinks" before answering by default, which is most of the wait.
+// MINIMAL skips it; if the API ever rejects the setting we drop it and retry.
+let thinkingSupported = true;
+const withMinimalThinking = (body) => ({
+  ...body,
+  generationConfig: { ...body.generationConfig, thinkingConfig: { thinkingLevel: "MINIMAL" } },
+});
+
 async function requestGemma(model, body) {
+  if (thinkingSupported) {
+    const response = await sendGemma(model, withMinimalThinking(body));
+    if (response.status !== 400) return response;
+    console.warn("[Vibe Alchemist] thinkingConfig rejected, retrying without it", await response.text().catch(() => ""));
+    thinkingSupported = false;
+  }
+  return sendGemma(model, body);
+}
+
+async function sendGemma(model, body) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
   return fetch(url, {
     method: "POST",
@@ -203,7 +222,7 @@ async function analyzeVibes(items) {
   const body = await buildGemmaRequest(items);
   if (CONFIG.mockGemma) {
     console.info("[Vibe Alchemist] mock mode: Gemma request that would be sent", redactImages(body));
-    await wait(1900);
+    await wait(900);
     return parseGemmaJson(JSON.stringify(pickMockBrew(items).reading));
   }
   return parseGemmaJson(await callGemma(body));
@@ -456,25 +475,19 @@ async function findSuggestedTrack(song, token) {
 async function summonTracks(reading) {
   if (CONFIG.mockSpotify) {
     console.info("[Vibe Alchemist] mock mode: Spotify searches that would be sent", reading.song_suggestions, reading.seed_genres);
-    await wait(1100);
+    await wait(500);
     return mockSpotifyResponse(reading).tracks.map(normalizeTrack);
   }
   const token = await getSpotifyToken();
 
-  const found = (await Promise.all(reading.song_suggestions.map((song) => findSuggestedTrack(song, token)))).filter(Boolean);
-  let tracks = interleave([found], 5);
-
-  if (tracks.length < 5) {
-    // Top genre-tagged results (offset 0 = most relevant) fill any gaps.
-    const byGenre = await Promise.all(
-      reading.seed_genres.map(async (genre) => {
-        // Two pages, since filtering out non-songs can thin a page of 10.
-        const pages = await Promise.all([0, 10].map((offset) => searchTracks(`genre:"${genre}"`, token, offset).catch(() => [])));
-        return pages.flat();
-      }),
-    );
-    tracks = interleave([tracks, ...byGenre], 5);
-  }
+  // Look up Gemma's suggestions and the genre top-ups in one parallel round trip
+  // (genre results are only used if fewer than 5 suggestions are found).
+  const [found, byGenre] = await Promise.all([
+    Promise.all(reading.song_suggestions.map((song) => findSuggestedTrack(song, token))),
+    Promise.all(reading.seed_genres.map((genre) => searchTracks(`genre:"${genre}"`, token).catch(() => []))),
+  ]);
+  let tracks = interleave([found.filter(Boolean)], 5);
+  if (tracks.length < 5) tracks = interleave([tracks, ...byGenre], 5);
   if (!tracks.length) throw new Error("No tracks matched this mood. Try different ingredients.");
   return tracks.map(normalizeTrack);
 }
@@ -1913,6 +1926,7 @@ export default function App() {
     setPhase("gemma");
     setStage("brewing");
     try {
+      if (!CONFIG.mockSpotify) getSpotifyToken().catch(() => {}); // warm the token while Gemma thinks
       const [brewed] = await Promise.all([
         (async () => {
           const reading = await analyzeVibes(items);
@@ -1920,7 +1934,7 @@ export default function App() {
           const tracks = await summonTracks(reading);
           return { reading, tracks };
         })(),
-        wait(Math.max(MIN_BREW_MS, items.length * DROP_STAGGER * 1000 + 1800)), // let every potion land
+        wait(Math.max(MIN_BREW_MS, items.length * DROP_STAGGER * 1000 + 1100)), // let every potion land
       ]);
       setResult(brewed);
       setPlaylist({ status: "idle" });
