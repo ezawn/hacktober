@@ -1278,10 +1278,12 @@ function IngredientInput({ mode, disabled, onAddText, onAddFiles, onAddSong }) {
 // Stage layout in "GIF pixels" (the witch animation's own pixel grid), so every
 // layer lines up at any screen size. public/witch.webp is the witch alone,
 // mirrored, 154x225, cut out of the original GIF with the cauldron and fire removed.
-const STAGE = { w: 330, h: 300 };
-const WITCH = { src: "/witch.webp", left: 172, top: 6, w: 154, h: 225 };
+// The stage is symmetric around the cauldron's centre so the pot sits in the middle
+// of the page, right under the ingredient ledge; the witch stands off to the right.
+const STAGE = { w: 428, h: 300 };
+const WITCH = { src: "/witch.webp", left: 274, top: 6, w: 154, h: 225 };
 const POT_PX = 3; // one cauldron art pixel = 3 GIF pixels, matching the witch's chunky pixels
-const POT_POS = { left: 0, top: 110 };
+const POT_POS = { left: 102, top: 110 }; // 102 + 37.5 * 3 = 214.5 ≈ STAGE.w / 2
 
 // A big round cauldron, generated so it stays crisp and easy to tweak.
 const BIG_POT = (() => {
@@ -1373,12 +1375,86 @@ const MINI_SCALE = 4;
 const DROP_STAGGER = 0.18;
 const DROP_DURATION = 0.9;
 
-const POT_BUBBLES = [
-  { x: -22, delay: 0, size: 4 },
-  { x: 6, delay: 0.7, size: 6 },
-  { x: 24, delay: 1.3, size: 4 },
-  { x: -6, delay: 1.9, size: 5 },
+// Bubbles are drawn frame by frame on the cauldron's own pixel grid, like an old
+// console sprite: grow, wobble, pop, with specks hopping upward one pixel at a time.
+const BUBBLE_FRAMES = [
+  null,
+  ["g"],
+  [".g.", "glg", ".g."],
+  [".kk.", "kwlk", "klgk", ".kk."],
+  [".kkkk.", "kwwllk", "kwlllk", "kllggk", ".kkkk."],
+  [".kkkk.", "kwwllk", "kwlllk", "kllggk", ".kkkk."],
+  ["..kkkk..", ".kwwlllk", "kwwllllk", "kllllggk", ".kkkkkk."],
+  ["w......w", "...ww...", "........", "w......w"],
+  ["w........w", "..........", "....w.....", "..........", "w........w"],
+  null,
+  null,
 ];
+const BUBBLE_PALETTE = { k: "#1f6b0e", g: "#4cc226", l: "#7be43f", w: "#e4ffc8" };
+// x offsets (art pixels from the pot centre) and where in the cycle each bubble starts
+const POT_BUBBLES = [
+  { x: -19, offset: 0 },
+  { x: -5, offset: 5 },
+  { x: 10, offset: 8 },
+  { x: 22, offset: 3 },
+];
+const SPECKS = [
+  { x: -16, offset: 0 },
+  { x: -2, offset: 5 },
+  { x: 13, offset: 2 },
+  { x: 24, offset: 8 },
+];
+const SPECK_RISE = 10; // art pixels
+
+function usePixelTick(ms) {
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return undefined;
+    const id = window.setInterval(() => setTick((t) => t + 1), ms);
+    return () => window.clearInterval(id);
+  }, [ms]);
+  return tick;
+}
+
+function PotBubbles({ brewing }) {
+  const tick = usePixelTick(brewing ? 90 : 160);
+  const surface = 5; // art row of the potion's surface
+  const at = (artX, artY, cols) => ({
+    left: pct(POT_POS.left + (37.5 + artX) * POT_PX, STAGE.w),
+    top: pct(POT_POS.top + artY * POT_PX, STAGE.h),
+    width: pct(cols * POT_PX, STAGE.w),
+  });
+  return (
+    <>
+      {POT_BUBBLES.map((bubble, i) => {
+        const frame = BUBBLE_FRAMES[(tick + bubble.offset) % BUBBLE_FRAMES.length];
+        if (!frame) return null;
+        const size = frame[0].length;
+        return (
+          <PixelSprite
+            key={i}
+            art={frame}
+            palette={BUBBLE_PALETTE}
+            className="absolute h-auto"
+            style={at(bubble.x - Math.floor(size / 2), surface + 1 - frame.length, size)}
+          />
+        );
+      })}
+      {SPECKS.map((speck, i) => {
+        const step = (tick + speck.offset) % (SPECK_RISE + 4);
+        if (step >= SPECK_RISE) return null;
+        const wobble = step % 4 === 1 ? 1 : step % 4 === 3 ? -1 : 0;
+        return (
+          <span
+            key={`speck-${i}`}
+            className="absolute bg-[#7be43f]"
+            style={{ ...at(speck.x + wobble, surface - 2 - step, 1), aspectRatio: "1", opacity: step > SPECK_RISE - 3 ? 0.5 : 1 }}
+          />
+        );
+      })}
+    </>
+  );
+}
 
 function CauldronArt({ brewing }) {
   const potW = BIG_POT[0].length * POT_PX;
@@ -1408,20 +1484,7 @@ function CauldronArt({ brewing }) {
       />
 
       {/* bubbles popping on the potion */}
-      {POT_BUBBLES.map((bubble, i) => (
-        <motion.span
-          key={i}
-          className="absolute border border-[#1a4d0a] bg-[#7be43f]"
-          style={{
-            left: pct(POT_POS.left + (37.5 + bubble.x) * POT_PX, STAGE.w),
-            top: pct(POT_POS.top + 5 * POT_PX, STAGE.h),
-            width: pct(bubble.size * POT_PX * 0.7, STAGE.w),
-            aspectRatio: "1",
-          }}
-          animate={{ scale: [0, 1, 1.25, 0], y: [0, -2, -4, -4] }}
-          transition={{ duration: brewing ? 0.9 : 1.6, delay: bubble.delay * (brewing ? 0.5 : 1), repeat: Infinity, ease: stepEase }}
-        />
-      ))}
+      <PotBubbles brewing={brewing} />
 
       {/* steam curling up out of the pot */}
       {[-18, 4, 22].map((x, i) => (
@@ -1618,7 +1681,7 @@ function CauldronStage({ items, brewing, onRemove }) {
       </div>
 
       {/* The witch and her cauldron */}
-      <div className="relative mx-auto -mt-2 w-full max-w-[520px]" style={{ aspectRatio: `${STAGE.w} / ${STAGE.h}` }}>
+      <div className="relative mx-auto -mt-2 w-full max-w-[680px]" style={{ aspectRatio: `${STAGE.w} / ${STAGE.h}` }}>
         <motion.div
           aria-hidden="true"
           className="absolute h-1/4 w-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-lime-400 blur-3xl"
